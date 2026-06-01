@@ -8,3 +8,4 @@ axum = "0.8"
 serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["full"] }
 nanoid = "0.5"
+toml = "0.8"

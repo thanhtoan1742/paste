@@ -10,6 +10,30 @@ struct PasteForm {
     content: String,
 }
 
+#[derive(Deserialize)]
+struct Config {
+    #[serde(default = "default_bind")]
+    bind: String,
+    #[serde(default = "default_ttl_secs")]
+    ttl_secs: u64,
+    #[serde(default = "default_max_size")]
+    max_size: usize,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            bind: default_bind(),
+            ttl_secs: default_ttl_secs(),
+            max_size: default_max_size(),
+        }
+    }
+}
+
+fn default_bind() -> String { "0.0.0.0:3000".to_string() }
+fn default_ttl_secs() -> u64 { 3600 }
+fn default_max_size() -> usize { 8_388_608 }
+
 const SUBMIT_PAGE: &str = r#"<!DOCTYPE html>
 <html><head><title>paste</title></head>
 <body>
@@ -34,6 +58,7 @@ struct PasteEntry {
 
 struct AppState {
     pastes: RwLock<HashMap<String, PasteEntry>>,
+    config: Config,
 }
 
 async fn home() -> impl IntoResponse {
@@ -44,24 +69,15 @@ async fn create_paste(
     State(state): State<Arc<AppState>>,
     Form(form): Form<PasteForm>,
 ) -> impl IntoResponse {
-    let max_size = std::env::var("PASTE_MAX_SIZE")
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
-        .unwrap_or(1_048_576);
-
-    if form.content.len() > max_size {
+    if form.content.len() > state.config.max_size {
         return axum::http::StatusCode::PAYLOAD_TOO_LARGE.into_response();
     }
 
     let id = nanoid::nanoid!(8);
-    let ttl_secs = std::env::var("PASTE_TTL_SECS")
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-        .unwrap_or(86400);
 
     let entry = PasteEntry {
         content: form.content,
-        expires_at: Instant::now() + std::time::Duration::from_secs(ttl_secs),
+        expires_at: Instant::now() + std::time::Duration::from_secs(state.config.ttl_secs),
     };
 
     state.pastes.write().await.insert(id.clone(), entry);
@@ -96,9 +112,17 @@ fn html_escape(s: &str) -> String {
 
 #[tokio::main]
 async fn main() {
+    let config: Config = std::fs::read_to_string("paste.toml")
+        .ok()
+        .and_then(|s| toml::from_str(&s).ok())
+        .unwrap_or_default();
+
     let state = Arc::new(AppState {
         pastes: RwLock::new(HashMap::new()),
+        config,
     });
+
+    let bind = state.config.bind.clone();
 
     tokio::spawn({
         let state = state.clone();
@@ -116,7 +140,6 @@ async fn main() {
         .route("/{id}", get(get_paste))
         .with_state(state);
 
-    let bind = std::env::var("PASTE_BIND").unwrap_or_else(|_| "0.0.0.0:3000".to_string());
     let listener = tokio::net::TcpListener::bind(&bind).await.unwrap();
     println!("listening on {}", bind);
     axum::serve(listener, app).await.unwrap();
