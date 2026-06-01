@@ -45,6 +45,25 @@ pub fn base64_decode(input: &str) -> Result<Vec<u8>, ()> {
     Ok(out)
 }
 
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        let mut acc: u8 = 0;
+        for &byte in a {
+            acc |= byte;
+        }
+        for &byte in b {
+            acc |= byte;
+        }
+        acc == 0
+    } else {
+        let mut acc: u8 = 0;
+        for i in 0..a.len() {
+            acc |= a[i] ^ b[i];
+        }
+        acc == 0
+    }
+}
+
 pub fn check_basic_auth(auth_header: &str, expected_user: &str, expected_pass: &str) -> bool {
     let Some(encoded) = auth_header.strip_prefix("Basic ") else {
         return false;
@@ -58,7 +77,8 @@ pub fn check_basic_auth(auth_header: &str, expected_user: &str, expected_pass: &
     let Some((user, pass)) = creds.split_once(':') else {
         return false;
     };
-    user == expected_user && pass == expected_pass
+    constant_time_eq(user.as_bytes(), expected_user.as_bytes())
+        && constant_time_eq(pass.as_bytes(), expected_pass.as_bytes())
 }
 
 pub fn unauthorized_response() -> (

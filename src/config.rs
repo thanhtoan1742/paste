@@ -55,10 +55,22 @@ fn default_admin_pass() -> String {
 }
 
 pub fn load() -> Config {
-    std::fs::read_to_string("paste.toml")
-        .ok()
-        .and_then(|s| toml::from_str(&s).ok())
-        .unwrap_or_default()
+    let config = match std::fs::read_to_string("paste.toml") {
+        Ok(s) => match toml::from_str(&s) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("warning: failed to parse paste.toml: {e}; using defaults");
+                Config::default()
+            }
+        },
+        Err(_) => Config::default(),
+    };
+
+    if config.admin_user == "admin" && config.admin_pass == "admin" {
+        eprintln!("warning: using default admin credentials (admin:admin); set admin_user and admin_pass in paste.toml");
+    }
+
+    config
 }
 
 #[cfg(test)]

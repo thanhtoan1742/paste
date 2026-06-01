@@ -16,7 +16,9 @@ async fn main() {
     tokio::spawn({
         let state = state.clone();
         async move {
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(
+            handlers::SWEEPER_INTERVAL_SECS,
+        ));
             loop {
                 interval.tick().await;
                 state

@@ -1,7 +1,9 @@
 use axum::{
+    body::Body,
     extract::{Form, Path, State},
-    http::{header, Request, StatusCode},
-    response::IntoResponse,
+    http::{header, HeaderMap, Request, StatusCode},
+    middleware::{self, Next},
+    response::{IntoResponse, Response},
     routing::get,
     Router,
 };
@@ -13,11 +15,52 @@ use crate::auth::{check_basic_auth, unauthorized_response};
 use crate::state::AppState;
 use crate::templates;
 
+pub const SWEEPER_INTERVAL_SECS: u64 = 60;
+
 #[derive(Deserialize)]
 struct PasteForm {
     content: String,
     ttl: Option<u64>,
     ttl_custom: Option<String>,
+}
+
+fn format_duration(secs: u64) -> String {
+    let days = secs / 86400;
+    let hours = (secs % 86400) / 3600;
+    let minutes = (secs % 3600) / 60;
+    let seconds = secs % 60;
+    let mut parts = Vec::new();
+    if days > 0 {
+        parts.push(format!("{}d", days));
+    }
+    if hours > 0 {
+        parts.push(format!("{}h", hours));
+    }
+    if minutes > 0 {
+        parts.push(format!("{}m", minutes));
+    }
+    if seconds > 0 || parts.is_empty() {
+        parts.push(format!("{}s", seconds));
+    }
+    parts.join(" ")
+}
+
+async fn security_headers(req: Request<Body>, next: Next) -> Response {
+    let mut response = next.run(req).await;
+    let headers = response.headers_mut();
+    headers.insert(
+        header::STRICT_TRANSPORT_SECURITY,
+        "max-age=63072000; includeSubDomains".parse().unwrap(),
+    );
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        "nosniff".parse().unwrap(),
+    );
+    headers.insert(
+        header::X_FRAME_OPTIONS,
+        "DENY".parse().unwrap(),
+    );
+    response
 }
 
 async fn home() -> impl IntoResponse {
@@ -30,13 +73,6 @@ async fn create_paste(
 ) -> impl IntoResponse {
     if form.content.len() > state.config.max_size {
         return StatusCode::PAYLOAD_TOO_LARGE.into_response();
-    }
-
-    {
-        let pastes = state.pastes.read().await;
-        if pastes.len() >= state.config.max_pastes {
-            return StatusCode::INSUFFICIENT_STORAGE.into_response();
-        }
     }
 
     let ttl_secs = match form
@@ -63,9 +99,15 @@ async fn create_paste(
             .into_response();
     }
 
+    let mut pastes = state.pastes.write().await;
+
+    if pastes.len() >= state.config.max_pastes {
+        return StatusCode::INSUFFICIENT_STORAGE.into_response();
+    }
+
     let id = loop {
         let id = nanoid::nanoid!(4);
-        if !state.pastes.read().await.contains_key(&id) {
+        if !pastes.contains_key(&id) {
             break id;
         }
     };
@@ -75,7 +117,7 @@ async fn create_paste(
         expires_at: Instant::now() + std::time::Duration::from_secs(ttl_secs),
     };
 
-    state.pastes.write().await.insert(id.clone(), entry);
+    pastes.insert(id.clone(), entry);
 
     axum::response::Redirect::to(&format!("/{}", id)).into_response()
 }
@@ -86,13 +128,13 @@ async fn get_paste(
 ) -> impl IntoResponse {
     let pastes = state.pastes.read().await;
     let Some(entry) = pastes.get(&id) else {
-        return axum::response::Html(templates::NOT_FOUND_PAGE).into_response();
+        return (StatusCode::NOT_FOUND, axum::response::Html(templates::NOT_FOUND_PAGE)).into_response();
     };
 
     if Instant::now() > entry.expires_at {
         drop(pastes);
         state.pastes.write().await.remove(&id);
-        return axum::response::Html(templates::NOT_FOUND_PAGE).into_response();
+        return (StatusCode::GONE, axum::response::Html(templates::NOT_FOUND_PAGE)).into_response();
     }
 
     axum::response::Html(templates::view_page(&entry.content)).into_response()
@@ -100,10 +142,9 @@ async fn get_paste(
 
 async fn admin_page(
     State(state): State<Arc<AppState>>,
-    req: Request<axum::body::Body>,
+    headers: HeaderMap,
 ) -> impl IntoResponse {
-    let auth = req
-        .headers()
+    let auth = headers
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
@@ -121,11 +162,13 @@ async fn render_admin(state: &Arc<AppState>) -> axum::response::Response {
 
     let mut rows = String::new();
     for (id, entry) in pastes.iter() {
+        let escaped_id = templates::html_escape(id);
         let preview = templates::html_escape(&entry.content.chars().take(100).collect::<String>());
         let secs_left = entry.expires_at.duration_since(now).as_secs();
+        let human = format_duration(secs_left);
         rows.push_str(&format!(
-            "<tr><td><a href=\"/{}\">{}</a></td><td>{}s</td><td>{}...</td></tr>",
-            id, id, secs_left, preview
+            "<tr><td><a href=\"/{}\">{}</a></td><td>{}</td><td>{}...</td></tr>",
+            escaped_id, escaped_id, human, preview
         ));
     }
 
@@ -133,11 +176,14 @@ async fn render_admin(state: &Arc<AppState>) -> axum::response::Response {
 }
 
 pub fn build_app(state: Arc<AppState>) -> Router {
+    let body_limit = state.config.max_size + 4096;
     Router::new()
         .route("/", get(home).post(create_paste))
         .route("/{id}", get(get_paste))
         .route("/admin", get(admin_page))
         .with_state(state)
+        .layer(axum::extract::DefaultBodyLimit::max(body_limit))
+        .layer(middleware::from_fn(security_headers))
 }
 
 #[cfg(test)]
@@ -319,14 +365,14 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
         let body = axum::body::to_bytes(resp.into_body(), 8192).await.unwrap();
         let html = std::str::from_utf8(&body).unwrap();
         assert!(html.contains("not found or expired"));
     }
 
     #[tokio::test]
-    async fn get_paste_expired_returns_404() {
+    async fn get_paste_expired_returns_gone() {
         let state = test_state();
         state.pastes.write().await.insert(
             "expired1".to_string(),
@@ -345,6 +391,7 @@ mod tests {
             )
             .await
             .unwrap();
+        assert_eq!(resp.status(), StatusCode::GONE);
         let body = axum::body::to_bytes(resp.into_body(), 8192).await.unwrap();
         let html = std::str::from_utf8(&body).unwrap();
         assert!(html.contains("not found or expired"));

@@ -6,7 +6,7 @@ edition = "2021"
 [dependencies]
 axum = "0.8"
 serde = { version = "1", features = ["derive"] }
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "time", "sync"] }
 nanoid = "0.5"
 toml = "0.8"
 
