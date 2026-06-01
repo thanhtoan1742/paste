@@ -54,7 +54,8 @@ pub fn view_page(content: &str) -> String {
 <html><head><title>paste</title><style>{}</style></head>
 <body>
 <main>
-<pre>{}</pre>
+<button onclick="navigator.clipboard.writeText(document.getElementById('content').textContent);this.textContent='copied!';setTimeout(()=>this.textContent='copy',1500)">copy</button>
+<pre id="content">{}</pre>
 </main>
 </body></html>"#,
         STYLE_STR,

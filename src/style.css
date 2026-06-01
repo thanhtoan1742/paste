@@ -68,6 +68,21 @@ input[type="submit"]:hover {
   background-color: var(--accent-hover);
   border-color: var(--accent-hover);
 }
+button.copy {
+  background-color: var(--accent);
+  color: var(--accent-text);
+  border: 1px solid var(--accent);
+  border-radius: 5px;
+  padding: 0.5em 1.5em;
+  cursor: pointer;
+  font-family: var(--sans-font);
+  font-size: 0.85rem;
+  margin-bottom: 0.5rem;
+}
+button.copy:hover {
+  background-color: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
 pre {
   font-family: var(--mono-font);
   background-color: var(--accent-bg);
