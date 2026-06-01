@@ -45,6 +45,28 @@ fn format_duration(secs: u64) -> String {
     parts.join(" ")
 }
 
+async fn lockdown_auth(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    req: Request<Body>,
+    next: Next,
+) -> Response {
+    if !state.config.lockdown {
+        return next.run(req).await;
+    }
+    let auth = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    let lockdown_ok = check_basic_auth(auth, &state.config.lockdown_user, &state.config.lockdown_password);
+    let admin_ok = check_basic_auth(auth, &state.config.admin_user, &state.config.admin_password);
+    if lockdown_ok || admin_ok {
+        next.run(req).await
+    } else {
+        unauthorized_response().into_response()
+    }
+}
+
 async fn security_headers(req: Request<Body>, next: Next) -> Response {
     let mut response = next.run(req).await;
     let headers = response.headers_mut();
@@ -153,7 +175,11 @@ async fn admin_page(State(state): State<Arc<AppState>>, headers: HeaderMap) -> i
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
 
-    if check_basic_auth(auth, &state.config.admin_user, &state.config.admin_password) {
+    let admin_ok = check_basic_auth(auth, &state.config.admin_user, &state.config.admin_password);
+    let lockdown_ok = state.config.lockdown
+        && check_basic_auth(auth, &state.config.lockdown_user, &state.config.lockdown_password);
+
+    if admin_ok || lockdown_ok {
         return render_admin(&state).await;
     }
 
@@ -183,6 +209,7 @@ async fn render_admin(state: &Arc<AppState>) -> axum::response::Response {
 pub fn build_app(state: Arc<AppState>) -> Router {
     let body_limit = state.config.max_size + 4096;
     let prefix = state.config.prefix.clone();
+    let state_for_lockdown = state.clone();
 
     let inner = Router::new()
         .route("/", get(home).post(create_paste))
@@ -190,6 +217,10 @@ pub fn build_app(state: Arc<AppState>) -> Router {
         .route("/admin", get(admin_page))
         .with_state(state)
         .layer(axum::extract::DefaultBodyLimit::max(body_limit))
+        .layer(middleware::from_fn_with_state(
+            state_for_lockdown,
+            lockdown_auth,
+        ))
         .layer(middleware::from_fn(security_headers));
 
     if prefix.is_empty() {
@@ -220,6 +251,9 @@ mod tests {
                 max_pastes: 2,
                 admin_user: "admin".to_string(),
                 admin_password: "secret".to_string(),
+                lockdown: false,
+                lockdown_user: "user".to_string(),
+                lockdown_password: "pass".to_string(),
             },
         })
     }
@@ -570,6 +604,9 @@ mod tests {
                 max_pastes: 2,
                 admin_user: "admin".to_string(),
                 admin_password: "secret".to_string(),
+                lockdown: false,
+                lockdown_user: "user".to_string(),
+                lockdown_password: "pass".to_string(),
             },
         })
     }
@@ -635,5 +672,120 @@ mod tests {
             .to_str()
             .unwrap();
         assert!(loc.starts_with("/paste/"));
+    }
+
+    fn lockdown_state() -> Arc<AppState> {
+        Arc::new(AppState {
+            pastes: tokio::sync::RwLock::new(std::collections::HashMap::new()),
+            config: Config {
+                bind: "127.0.0.1:0".to_string(),
+                prefix: String::new(),
+                max_ttl_secs: 86400,
+                default_ttl_mins: 15,
+                max_size: 100,
+                max_pastes: 2,
+                admin_user: "admin".to_string(),
+                admin_password: "adminsecret".to_string(),
+                lockdown: true,
+                lockdown_user: "lockuser".to_string(),
+                lockdown_password: "lockpass".to_string(),
+            },
+        })
+    }
+
+    #[tokio::test]
+    async fn lockdown_rejects_no_auth() {
+        let app = build_app(lockdown_state());
+        let resp = app
+            .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn lockdown_rejects_wrong_auth() {
+        let app = build_app(lockdown_state());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/")
+                    .header(header::AUTHORIZATION, encode_basic_auth("lockuser", "wrong"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn lockdown_allows_correct_auth() {
+        let app = build_app(lockdown_state());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/")
+                    .header(
+                        header::AUTHORIZATION,
+                        encode_basic_auth("lockuser", "lockpass"),
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn lockdown_admin_uses_admin_creds() {
+        let app = build_app(lockdown_state());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/admin")
+                    .header(
+                        header::AUTHORIZATION,
+                        encode_basic_auth("lockuser", "lockpass"),
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let app = build_app(lockdown_state());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/admin")
+                    .header(
+                        header::AUTHORIZATION,
+                        encode_basic_auth("admin", "adminsecret"),
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let app = build_app(lockdown_state());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/admin")
+                    .header(
+                        header::AUTHORIZATION,
+                        encode_basic_auth("wrong", "creds"),
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 }

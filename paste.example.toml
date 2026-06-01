@@ -1,8 +1,11 @@
 bind = "0.0.0.0:3000"
-prefix = ""
+prefix = "paste"
 max_ttl_secs = 86400
 default_ttl_mins = 15
 max_size = 8388608
 max_pastes = 512
 admin_user = "admin"
-admin_password = "admin"
+admin_password = "a"
+lockdown = true
+lockdown_user = "user"
+lockdown_password = "pass"
