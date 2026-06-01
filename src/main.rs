@@ -18,6 +18,8 @@ struct Config {
     ttl_secs: u64,
     #[serde(default = "default_max_size")]
     max_size: usize,
+    #[serde(default = "default_max_pastes")]
+    max_pastes: usize,
 }
 
 impl Default for Config {
@@ -26,6 +28,7 @@ impl Default for Config {
             bind: default_bind(),
             ttl_secs: default_ttl_secs(),
             max_size: default_max_size(),
+            max_pastes: default_max_pastes(),
         }
     }
 }
@@ -33,6 +36,7 @@ impl Default for Config {
 fn default_bind() -> String { "0.0.0.0:3000".to_string() }
 fn default_ttl_secs() -> u64 { 3600 }
 fn default_max_size() -> usize { 8_388_608 }
+fn default_max_pastes() -> usize { 512 }
 
 const SUBMIT_PAGE: &str = r#"<!DOCTYPE html>
 <html><head><title>paste</title></head>
@@ -71,6 +75,13 @@ async fn create_paste(
 ) -> impl IntoResponse {
     if form.content.len() > state.config.max_size {
         return axum::http::StatusCode::PAYLOAD_TOO_LARGE.into_response();
+    }
+
+    {
+        let pastes = state.pastes.read().await;
+        if pastes.len() >= state.config.max_pastes {
+            return axum::http::StatusCode::INSUFFICIENT_STORAGE.into_response();
+        }
     }
 
     let id = nanoid::nanoid!(8);
