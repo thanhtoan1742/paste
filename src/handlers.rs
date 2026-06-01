@@ -84,16 +84,16 @@ async fn create_paste(
         Some(mins) => mins * 60,
         None => match form.ttl {
             Some(mins) if mins > 0 => mins * 60,
-            _ => state.config.default_ttl_secs,
+            _ => state.config.default_ttl_mins * 60,
         },
     };
 
-    if ttl_secs > state.config.ttl_secs {
+    if ttl_secs > state.config.max_ttl_secs {
         return (
             StatusCode::BAD_REQUEST,
             axum::response::Html(templates::error_page(&format!(
                 "TTL exceeds maximum of {} minutes",
-                state.config.ttl_secs / 60
+                state.config.max_ttl_secs / 60
             ))),
         )
             .into_response();
@@ -149,7 +149,7 @@ async fn admin_page(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
 
-    if check_basic_auth(auth, &state.config.admin_user, &state.config.admin_pass) {
+    if check_basic_auth(auth, &state.config.admin_user, &state.config.admin_password) {
         return render_admin(&state).await;
     }
 
@@ -200,12 +200,12 @@ mod tests {
             pastes: tokio::sync::RwLock::new(std::collections::HashMap::new()),
             config: Config {
                 bind: "127.0.0.1:0".to_string(),
-                ttl_secs: 86400,
-                default_ttl_secs: 900,
+                max_ttl_secs: 86400,
+                default_ttl_mins: 15,
                 max_size: 100,
                 max_pastes: 2,
                 admin_user: "admin".to_string(),
-                admin_pass: "secret".to_string(),
+                admin_password: "secret".to_string(),
             },
         })
     }
