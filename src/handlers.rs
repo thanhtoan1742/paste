@@ -52,19 +52,13 @@ async fn security_headers(req: Request<Body>, next: Next) -> Response {
         header::STRICT_TRANSPORT_SECURITY,
         "max-age=63072000; includeSubDomains".parse().unwrap(),
     );
-    headers.insert(
-        header::X_CONTENT_TYPE_OPTIONS,
-        "nosniff".parse().unwrap(),
-    );
-    headers.insert(
-        header::X_FRAME_OPTIONS,
-        "DENY".parse().unwrap(),
-    );
+    headers.insert(header::X_CONTENT_TYPE_OPTIONS, "nosniff".parse().unwrap());
+    headers.insert(header::X_FRAME_OPTIONS, "DENY".parse().unwrap());
     response
 }
 
-async fn home() -> impl IntoResponse {
-    axum::response::Html(templates::SUBMIT_PAGE)
+async fn home(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    axum::response::Html(templates::submit_page(&state.config.prefix))
 }
 
 async fn create_paste(
@@ -74,6 +68,8 @@ async fn create_paste(
     if form.content.len() > state.config.max_size {
         return StatusCode::PAYLOAD_TOO_LARGE.into_response();
     }
+
+    let prefix = state.config.prefix.clone();
 
     let ttl_secs = match form
         .ttl_custom
@@ -91,10 +87,13 @@ async fn create_paste(
     if ttl_secs > state.config.max_ttl_secs {
         return (
             StatusCode::BAD_REQUEST,
-            axum::response::Html(templates::error_page(&format!(
-                "TTL exceeds maximum of {} minutes",
-                state.config.max_ttl_secs / 60
-            ))),
+            axum::response::Html(templates::error_page(
+                &state.config.prefix,
+                &format!(
+                    "TTL exceeds maximum of {} minutes",
+                    state.config.max_ttl_secs / 60
+                ),
+            )),
         )
             .into_response();
     }
@@ -119,7 +118,7 @@ async fn create_paste(
 
     pastes.insert(id.clone(), entry);
 
-    axum::response::Redirect::to(&format!("/{}", id)).into_response()
+    axum::response::Redirect::to(&format!("{}/{}", prefix, id)).into_response()
 }
 
 async fn get_paste(
@@ -128,22 +127,27 @@ async fn get_paste(
 ) -> impl IntoResponse {
     let pastes = state.pastes.read().await;
     let Some(entry) = pastes.get(&id) else {
-        return (StatusCode::NOT_FOUND, axum::response::Html(templates::NOT_FOUND_PAGE)).into_response();
+        return (
+            StatusCode::NOT_FOUND,
+            axum::response::Html(templates::not_found_page()),
+        )
+            .into_response();
     };
 
     if Instant::now() > entry.expires_at {
         drop(pastes);
         state.pastes.write().await.remove(&id);
-        return (StatusCode::GONE, axum::response::Html(templates::NOT_FOUND_PAGE)).into_response();
+        return (
+            StatusCode::GONE,
+            axum::response::Html(templates::not_found_page()),
+        )
+            .into_response();
     }
 
     axum::response::Html(templates::view_page(&entry.content)).into_response()
 }
 
-async fn admin_page(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-) -> impl IntoResponse {
+async fn admin_page(State(state): State<Arc<AppState>>, headers: HeaderMap) -> impl IntoResponse {
     let auth = headers
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
@@ -161,14 +165,15 @@ async fn render_admin(state: &Arc<AppState>) -> axum::response::Response {
     let now = Instant::now();
 
     let mut rows = String::new();
+    let prefix = &state.config.prefix;
     for (id, entry) in pastes.iter() {
         let escaped_id = templates::html_escape(id);
         let preview = templates::html_escape(&entry.content.chars().take(100).collect::<String>());
         let secs_left = entry.expires_at.duration_since(now).as_secs();
         let human = format_duration(secs_left);
         rows.push_str(&format!(
-            "<tr><td><a href=\"/{}\">{}</a></td><td>{}</td><td>{}...</td></tr>",
-            escaped_id, escaped_id, human, preview
+            "<tr><td><a href=\"{}/{}\">{}</a></td><td>{}</td><td>{}...</td></tr>",
+            prefix, escaped_id, escaped_id, human, preview
         ));
     }
 
@@ -177,13 +182,21 @@ async fn render_admin(state: &Arc<AppState>) -> axum::response::Response {
 
 pub fn build_app(state: Arc<AppState>) -> Router {
     let body_limit = state.config.max_size + 4096;
-    Router::new()
+    let prefix = state.config.prefix.clone();
+
+    let inner = Router::new()
         .route("/", get(home).post(create_paste))
         .route("/{id}", get(get_paste))
         .route("/admin", get(admin_page))
         .with_state(state)
         .layer(axum::extract::DefaultBodyLimit::max(body_limit))
-        .layer(middleware::from_fn(security_headers))
+        .layer(middleware::from_fn(security_headers));
+
+    if prefix.is_empty() {
+        inner
+    } else {
+        Router::new().nest(&prefix, inner)
+    }
 }
 
 #[cfg(test)]
@@ -200,6 +213,7 @@ mod tests {
             pastes: tokio::sync::RwLock::new(std::collections::HashMap::new()),
             config: Config {
                 bind: "127.0.0.1:0".to_string(),
+                prefix: String::new(),
                 max_ttl_secs: 86400,
                 default_ttl_mins: 15,
                 max_size: 100,
@@ -542,5 +556,84 @@ mod tests {
         let body = axum::body::to_bytes(resp.into_body(), 8192).await.unwrap();
         let html = std::str::from_utf8(&body).unwrap();
         assert!(html.contains("exceeds maximum"));
+    }
+
+    fn prefixed_state() -> Arc<AppState> {
+        Arc::new(AppState {
+            pastes: tokio::sync::RwLock::new(std::collections::HashMap::new()),
+            config: Config {
+                bind: "127.0.0.1:0".to_string(),
+                prefix: "/paste".to_string(),
+                max_ttl_secs: 86400,
+                default_ttl_mins: 15,
+                max_size: 100,
+                max_pastes: 2,
+                admin_user: "admin".to_string(),
+                admin_password: "secret".to_string(),
+            },
+        })
+    }
+
+    #[tokio::test]
+    async fn prefixed_routes_work() {
+        let state = prefixed_state();
+        state.pastes.write().await.insert(
+            "ab01".to_string(),
+            PasteEntry {
+                content: "prefixed content".to_string(),
+                expires_at: Instant::now() + std::time::Duration::from_secs(3600),
+            },
+        );
+        let app = build_app(state.clone());
+
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/paste")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 8192).await.unwrap();
+        let html = std::str::from_utf8(&body).unwrap();
+        assert!(html.contains("action=\"/paste\""));
+
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/paste/ab01")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 8192).await.unwrap();
+        let html = std::str::from_utf8(&body).unwrap();
+        assert!(html.contains("prefixed content"));
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/paste")
+                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .body(Body::from("content=new"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+        let loc = resp
+            .headers()
+            .get(header::LOCATION)
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(loc.starts_with("/paste/"));
     }
 }

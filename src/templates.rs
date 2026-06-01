@@ -1,28 +1,18 @@
-macro_rules! styled_page {
-    ($title:expr, $body:expr) => {
-        concat!(
-            r#"<!DOCTYPE html>
-<html><head><title>"#,
-            $title,
-            r#"</title><style>"#,
-            include_str!("style.css"),
-            r#"</style></head>
+const STYLE_STR: &str = include_str!("style.css");
+
+pub fn submit_page(prefix: &str) -> String {
+    let action = if prefix.is_empty() {
+        "/".to_string()
+    } else {
+        prefix.to_string()
+    };
+    format!(
+        r#"<!DOCTYPE html>
+<html><head><title>paste</title><style>{}</style></head>
 <body>
 <main>
-"#,
-            $body,
-            r#"
-</main>
-</body></html>"#
-        )
-    };
-}
-
-pub const SUBMIT_PAGE: &str = styled_page!(
-    "paste",
-    r#"
 <h1>paste</h1>
-<form method="POST" action="/">
+<form method="POST" action="{}">
 <textarea name="content" rows="20" autofocus></textarea>
 <select name="ttl">
 <option value="5">5 minutes</option>
@@ -36,17 +26,24 @@ pub const SUBMIT_PAGE: &str = styled_page!(
 <input name="ttl_custom" type="number" min="1" placeholder="or custom (minutes)">
 <input type="submit" value="paste">
 </form>
-"#
-);
+</main>
+</body></html>"#,
+        STYLE_STR, action
+    )
+}
 
-pub const NOT_FOUND_PAGE: &str = styled_page!(
-    "paste",
-    r#"
+pub fn not_found_page() -> String {
+    format!(
+        r#"<!DOCTYPE html>
+<html><head><title>paste</title><style>{}</style></head>
+<body>
+<main>
 <p>paste not found or expired</p>
-"#
-);
-
-const STYLE_STR: &str = include_str!("style.css");
+</main>
+</body></html>"#,
+        STYLE_STR
+    )
+}
 
 pub fn view_page(content: &str) -> String {
     format!(
@@ -80,13 +77,12 @@ pub fn admin_page(count: usize, rows: &str) -> String {
     )
 }
 
-pub fn html_escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-}
-
-pub fn error_page(message: &str) -> String {
+pub fn error_page(prefix: &str, message: &str) -> String {
+    let back = if prefix.is_empty() {
+        "/".to_string()
+    } else {
+        prefix.to_string()
+    };
     format!(
         r#"<!DOCTYPE html>
 <html><head><title>paste</title><style>{}</style></head>
@@ -94,12 +90,19 @@ pub fn error_page(message: &str) -> String {
 <main>
 <h1>error</h1>
 <p>{}</p>
-<p><a href="/">back</a></p>
+<p><a href="{}">back</a></p>
 </main>
 </body></html>"#,
         STYLE_STR,
-        html_escape(message)
+        html_escape(message),
+        back
     )
+}
+
+pub fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 #[cfg(test)]
@@ -119,5 +122,29 @@ mod tests {
     #[test]
     fn html_escape_mixed() {
         assert_eq!(html_escape("a<b&c>d"), "a&lt;b&amp;c&gt;d");
+    }
+
+    #[test]
+    fn submit_page_root_prefix() {
+        let html = submit_page("");
+        assert!(html.contains("action=\"/\""));
+    }
+
+    #[test]
+    fn submit_page_custom_prefix() {
+        let html = submit_page("/paste");
+        assert!(html.contains("action=\"/paste\""));
+    }
+
+    #[test]
+    fn error_page_back_link_root() {
+        let html = error_page("", "oops");
+        assert!(html.contains("href=\"/\""));
+    }
+
+    #[test]
+    fn error_page_back_link_prefix() {
+        let html = error_page("/paste", "oops");
+        assert!(html.contains("href=\"/paste\""));
     }
 }

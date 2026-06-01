@@ -4,6 +4,8 @@ use serde::Deserialize;
 pub struct Config {
     #[serde(default = "default_bind")]
     pub bind: String,
+    #[serde(default = "default_prefix")]
+    pub prefix: String,
     #[serde(default = "default_max_ttl_secs")]
     pub max_ttl_secs: u64,
     #[serde(default = "default_default_ttl_mins")]
@@ -22,6 +24,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             bind: default_bind(),
+            prefix: default_prefix(),
             max_ttl_secs: default_max_ttl_secs(),
             default_ttl_mins: default_default_ttl_mins(),
             max_size: default_max_size(),
@@ -34,6 +37,9 @@ impl Default for Config {
 
 fn default_bind() -> String {
     "0.0.0.0:3000".to_string()
+}
+fn default_prefix() -> String {
+    String::new()
 }
 fn default_max_ttl_secs() -> u64 {
     86400
@@ -55,7 +61,7 @@ fn default_admin_password() -> String {
 }
 
 pub fn load() -> Config {
-    let config = match std::fs::read_to_string("paste.toml") {
+    let mut config = match std::fs::read_to_string("paste.toml") {
         Ok(s) => match toml::from_str(&s) {
             Ok(c) => c,
             Err(e) => {
@@ -66,11 +72,25 @@ pub fn load() -> Config {
         Err(_) => Config::default(),
     };
 
+    normalize_prefix(&mut config);
+
     if config.admin_user == "admin" && config.admin_password == "admin" {
         eprintln!("warning: using default admin credentials (admin:admin); set admin_user and admin_password in paste.toml");
     }
 
     config
+}
+
+fn normalize_prefix(config: &mut Config) {
+    if config.prefix.is_empty() {
+        return;
+    }
+    if !config.prefix.starts_with('/') {
+        config.prefix.insert(0, '/');
+    }
+    while config.prefix.len() > 1 && config.prefix.ends_with('/') {
+        config.prefix.pop();
+    }
 }
 
 #[cfg(test)]
@@ -81,6 +101,7 @@ mod tests {
     fn config_defaults() {
         let config = Config::default();
         assert_eq!(config.bind, "0.0.0.0:3000");
+        assert_eq!(config.prefix, "");
         assert_eq!(config.max_ttl_secs, 86400);
         assert_eq!(config.default_ttl_mins, 15);
         assert_eq!(config.max_size, 8_388_608);
@@ -93,6 +114,7 @@ mod tests {
     fn config_from_toml() {
         let toml = r#"
 bind = "0.0.0.0:8080"
+prefix = "/paste"
 max_ttl_secs = 120
 default_ttl_mins = 60
 max_size = 2048
@@ -102,6 +124,7 @@ admin_password = "pass123"
 "#;
         let config: Config = toml::from_str(toml).unwrap();
         assert_eq!(config.bind, "0.0.0.0:8080");
+        assert_eq!(config.prefix, "/paste");
         assert_eq!(config.max_ttl_secs, 120);
         assert_eq!(config.default_ttl_mins, 60);
         assert_eq!(config.max_size, 2048);
@@ -115,11 +138,43 @@ admin_password = "pass123"
         let toml = r#"bind = "0.0.0.0:9999""#;
         let config: Config = toml::from_str(toml).unwrap();
         assert_eq!(config.bind, "0.0.0.0:9999");
+        assert_eq!(config.prefix, "");
         assert_eq!(config.max_ttl_secs, 86400);
         assert_eq!(config.default_ttl_mins, 15);
         assert_eq!(config.max_size, 8_388_608);
         assert_eq!(config.max_pastes, 512);
         assert_eq!(config.admin_user, "admin");
         assert_eq!(config.admin_password, "admin");
+    }
+
+    #[test]
+    fn prefix_normalization() {
+        let mut config = Config {
+            prefix: "paste".to_string(),
+            ..Config::default()
+        };
+        normalize_prefix(&mut config);
+        assert_eq!(config.prefix, "/paste");
+
+        let mut config = Config {
+            prefix: "/paste/".to_string(),
+            ..Config::default()
+        };
+        normalize_prefix(&mut config);
+        assert_eq!(config.prefix, "/paste");
+
+        let mut config = Config {
+            prefix: "//paste//".to_string(),
+            ..Config::default()
+        };
+        normalize_prefix(&mut config);
+        assert_eq!(config.prefix, "//paste");
+
+        let mut config = Config {
+            prefix: String::new(),
+            ..Config::default()
+        };
+        normalize_prefix(&mut config);
+        assert_eq!(config.prefix, "");
     }
 }
