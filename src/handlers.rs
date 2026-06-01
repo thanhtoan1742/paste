@@ -67,6 +67,22 @@ async fn lockdown_auth(
     }
 }
 
+async fn strip_trailing_slash(req: Request<Body>, next: Next) -> Response {
+    let path = req.uri().path();
+    if path != "/" && path.ends_with('/') {
+        let mut new_path = path.to_string();
+        while new_path.len() > 1 && new_path.ends_with('/') {
+            new_path.pop();
+        }
+        let location = match req.uri().query() {
+            Some(q) => format!("{}?{}", new_path, q),
+            None => new_path,
+        };
+        return axum::response::Redirect::permanent(&location).into_response();
+    }
+    next.run(req).await
+}
+
 async fn security_headers(req: Request<Body>, next: Next) -> Response {
     let mut response = next.run(req).await;
     let headers = response.headers_mut();
@@ -252,11 +268,13 @@ pub fn build_app(state: Arc<AppState>) -> Router {
         ))
         .layer(middleware::from_fn(security_headers));
 
-    if prefix.is_empty() {
+    let router = if prefix.is_empty() {
         inner
     } else {
         Router::new().nest(&prefix, inner)
-    }
+    };
+
+    router.layer(middleware::from_fn(strip_trailing_slash))
 }
 
 #[cfg(test)]
@@ -872,5 +890,40 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn trailing_slash_redirects() {
+        let app = test_app();
+        let resp = app
+            .oneshot(Request::builder().uri("/admin/").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::PERMANENT_REDIRECT);
+        assert_eq!(resp.headers().get(header::LOCATION).unwrap(), "/admin");
+    }
+
+    #[tokio::test]
+    async fn trailing_slash_redirects_with_prefix() {
+        let app = build_app(prefixed_state());
+        let resp = app
+            .oneshot(Request::builder().uri("/paste/admin/").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::PERMANENT_REDIRECT);
+        assert_eq!(
+            resp.headers().get(header::LOCATION).unwrap(),
+            "/paste/admin"
+        );
+    }
+
+    #[tokio::test]
+    async fn root_no_redirect() {
+        let app = test_app();
+        let resp = app
+            .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
     }
 }
