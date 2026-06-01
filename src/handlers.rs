@@ -4,7 +4,7 @@ use axum::{
     http::{header, HeaderMap, Request, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::get,
+    routing::{get, post},
     Router,
 };
 use serde::Deserialize;
@@ -186,6 +186,34 @@ async fn admin_page(State(state): State<Arc<AppState>>, headers: HeaderMap) -> i
     unauthorized_response().into_response()
 }
 
+async fn delete_paste(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let auth = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+
+    let admin_ok = check_basic_auth(auth, &state.config.admin_user, &state.config.admin_password);
+    let lockdown_ok = state.config.lockdown
+        && check_basic_auth(auth, &state.config.lockdown_user, &state.config.lockdown_password);
+
+    if !admin_ok && !lockdown_ok {
+        return unauthorized_response().into_response();
+    }
+
+    state.pastes.write().await.remove(&id);
+
+    let admin_path = if state.config.prefix.is_empty() {
+        "/admin".to_string()
+    } else {
+        format!("{}/admin", state.config.prefix)
+    };
+    axum::response::Redirect::to(&admin_path).into_response()
+}
+
 async fn render_admin(state: &Arc<AppState>) -> axum::response::Response {
     let pastes = state.pastes.read().await;
     let now = Instant::now();
@@ -198,8 +226,8 @@ async fn render_admin(state: &Arc<AppState>) -> axum::response::Response {
         let secs_left = entry.expires_at.duration_since(now).as_secs();
         let human = format_duration(secs_left);
         rows.push_str(&format!(
-            "<tr><td><a href=\"{}/{}\">{}</a></td><td>{}</td><td>{}...</td></tr>",
-            prefix, escaped_id, escaped_id, human, preview
+            "<tr><td><a href=\"{}/{}\">{}</a></td><td>{}</td><td>{}...</td><td><form method=\"POST\" action=\"{}/admin/{}/delete\"><button type=\"submit\">delete</button></form></td></tr>",
+            prefix, escaped_id, escaped_id, human, preview, prefix, escaped_id
         ));
     }
 
@@ -215,6 +243,7 @@ pub fn build_app(state: Arc<AppState>) -> Router {
         .route("/", get(home).post(create_paste))
         .route("/{id}", get(get_paste))
         .route("/admin", get(admin_page))
+        .route("/admin/{id}/delete", post(delete_paste))
         .with_state(state)
         .layer(axum::extract::DefaultBodyLimit::max(body_limit))
         .layer(middleware::from_fn_with_state(
@@ -519,6 +548,62 @@ mod tests {
         assert!(html.contains("1 pastes"));
         assert!(html.contains("abc12345"));
         assert!(html.contains("test content"));
+        assert!(html.contains("actions"));
+    }
+
+    #[tokio::test]
+    async fn delete_paste_removes_entry() {
+        let state = test_state();
+        state.pastes.write().await.insert(
+            "del1".to_string(),
+            PasteEntry {
+                content: "to be deleted".to_string(),
+                expires_at: Instant::now() + std::time::Duration::from_secs(3600),
+            },
+        );
+        let app = build_app(state.clone());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/admin/del1/delete")
+                    .header(header::AUTHORIZATION, encode_basic_auth("admin", "secret"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+        assert_eq!(
+            resp.headers().get(header::LOCATION).unwrap().to_str().unwrap(),
+            "/admin"
+        );
+        assert!(state.pastes.read().await.get("del1").is_none());
+    }
+
+    #[tokio::test]
+    async fn delete_paste_rejects_no_auth() {
+        let state = test_state();
+        state.pastes.write().await.insert(
+            "del2".to_string(),
+            PasteEntry {
+                content: "still here".to_string(),
+                expires_at: Instant::now() + std::time::Duration::from_secs(3600),
+            },
+        );
+        let app = build_app(state.clone());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/admin/del2/delete")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        assert!(state.pastes.read().await.get("del2").is_some());
     }
 
     #[tokio::test]

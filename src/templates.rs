@@ -68,7 +68,7 @@ pub fn admin_page(count: usize, rows: &str) -> String {
 <main>
 <h1>{} pastes</h1>
 <table>
-<tr><th>id</th><th>expires in</th><th>preview</th></tr>
+<tr><th>id</th><th>expires in</th><th>preview</th><th>actions</th></tr>
 {}
 </table>
 </main>
