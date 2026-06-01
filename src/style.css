@@ -44,7 +44,7 @@ table { border-collapse: collapse; margin: 1.5rem 0; width: 100%; }
 td, th { border: 1px solid var(--border); text-align: start; padding: 0.5rem; }
 th { background-color: var(--accent-bg); font-weight: bold; }
 tr:nth-child(even) { background-color: var(--accent-bg); }
-textarea, input {
+textarea, input, select {
   font-size: inherit;
   font-family: var(--mono-font);
   padding: 0.5rem;

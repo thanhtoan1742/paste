@@ -2,32 +2,45 @@ use axum::http::{header, StatusCode};
 
 pub fn base64_decode(input: &str) -> Result<Vec<u8>, ()> {
     const T: [i8; 128] = [
-        -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
-        -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
-        -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,62,-1,-1,-1,63,
-        52,53,54,55,56,57,58,59,60,61,-1,-1,-1,-1,-1,-1,
-        -1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9,10,11,12,13,14,
-        15,16,17,18,19,20,21,22,23,24,25,-1,-1,-1,-1,-1,
-        -1,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,
-        41,42,43,44,45,46,47,48,49,50,51,-1,-1,-1,-1,-1,
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+        -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 62, -1, -1,
+        -1, 63, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, -1, -1, -1, -1, -1, -1, -1, 0, 1, 2, 3, 4,
+        5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, -1, -1, -1,
+        -1, -1, -1, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45,
+        46, 47, 48, 49, 50, 51, -1, -1, -1, -1, -1,
     ];
 
-    let bytes: Vec<u8> = input.bytes().filter(|&b| b != b'\n' && b != b'\r').collect();
-    if bytes.len() % 4 != 0 { return Err(()); }
+    let bytes: Vec<u8> = input
+        .bytes()
+        .filter(|&b| b != b'\n' && b != b'\r')
+        .collect();
+    if bytes.len() % 4 != 0 {
+        return Err(());
+    }
 
     let mut out = Vec::with_capacity(bytes.len() * 3 / 4);
     for chunk in bytes.chunks(4) {
         let v: [i8; 4] = std::array::from_fn(|i| {
-            if chunk[i] == b'=' { 0 } else { T.get(chunk[i] as usize).copied().unwrap_or(-1) }
+            if chunk[i] == b'=' {
+                0
+            } else {
+                T.get(chunk[i] as usize).copied().unwrap_or(-1)
+            }
         });
-        if v.iter().any(|&x| x < 0) { return Err(()); }
+        if v.iter().any(|&x| x < 0) {
+            return Err(());
+        }
 
         let pad2 = chunk.len() > 2 && chunk[2] == b'=';
         let pad3 = chunk.len() > 3 && chunk[3] == b'=';
 
         out.push(((v[0] as u8) << 2) | ((v[1] as u8) >> 4));
-        if !pad2 { out.push(((v[1] as u8 & 0xf) << 4) | ((v[2] as u8) >> 2)); }
-        if !pad3 { out.push(((v[2] as u8 & 0x3) << 6) | (v[3] as u8)); }
+        if !pad2 {
+            out.push(((v[1] as u8 & 0xf) << 4) | ((v[2] as u8) >> 2));
+        }
+        if !pad3 {
+            out.push(((v[2] as u8 & 0x3) << 6) | (v[3] as u8));
+        }
     }
     Ok(out)
 }
@@ -48,7 +61,11 @@ pub fn check_basic_auth(auth_header: &str, expected_user: &str, expected_pass: &
     user == expected_user && pass == expected_pass
 }
 
-pub fn unauthorized_response() -> (StatusCode, [(axum::http::header::HeaderName, &'static str); 1], axum::response::Html<String>) {
+pub fn unauthorized_response() -> (
+    StatusCode,
+    [(axum::http::header::HeaderName, &'static str); 1],
+    axum::response::Html<String>,
+) {
     (
         StatusCode::UNAUTHORIZED,
         [(header::WWW_AUTHENTICATE, r#"Basic realm="paste admin""#)],

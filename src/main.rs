@@ -19,7 +19,11 @@ async fn main() {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
             loop {
                 interval.tick().await;
-                state.pastes.write().await.retain(|_, entry| Instant::now() < entry.expires_at);
+                state
+                    .pastes
+                    .write()
+                    .await
+                    .retain(|_, entry| Instant::now() < entry.expires_at);
             }
         }
     });
