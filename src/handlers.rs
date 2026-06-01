@@ -159,7 +159,7 @@ mod tests {
         let app = test_app();
         let resp = app.oneshot(Request::builder().uri("/").body(Body::empty()).unwrap()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), 1024).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), 8192).await.unwrap();
         let html = std::str::from_utf8(&body).unwrap();
         assert!(html.contains("<textarea"));
         assert!(html.contains("paste"));
@@ -228,7 +228,7 @@ mod tests {
         let app = build_app(state);
         let resp = app.oneshot(Request::builder().uri("/testid1").body(Body::empty()).unwrap()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), 1024).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), 8192).await.unwrap();
         let html = std::str::from_utf8(&body).unwrap();
         assert!(html.contains("hello world"));
     }
@@ -238,7 +238,7 @@ mod tests {
         let app = test_app();
         let resp = app.oneshot(Request::builder().uri("/nonexistent").body(Body::empty()).unwrap()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), 1024).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), 8192).await.unwrap();
         let html = std::str::from_utf8(&body).unwrap();
         assert!(html.contains("not found or expired"));
     }
@@ -252,7 +252,7 @@ mod tests {
         });
         let app = build_app(state.clone());
         let resp = app.oneshot(Request::builder().uri("/expired1").body(Body::empty()).unwrap()).await.unwrap();
-        let body = axum::body::to_bytes(resp.into_body(), 1024).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), 8192).await.unwrap();
         let html = std::str::from_utf8(&body).unwrap();
         assert!(html.contains("not found or expired"));
         assert!(state.pastes.read().await.get("expired1").is_none());
