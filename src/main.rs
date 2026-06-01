@@ -6,9 +6,28 @@ mod templates;
 
 use std::time::Instant;
 
+fn parse_config_path() -> String {
+    let args: Vec<String> = std::env::args().collect();
+    let mut i = 1;
+    while i < args.len() {
+        if (args[i] == "--config" || args[i] == "-c") && i + 1 < args.len() {
+            return args[i + 1].clone();
+        }
+        i += 1;
+    }
+    "paste.toml".to_string()
+}
+
 #[tokio::main]
 async fn main() {
-    let config = config::load();
+    let path = parse_config_path();
+    let config = match config::load(&path) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("error: {e}");
+            std::process::exit(1);
+        }
+    };
 
     let state = state::new_app_state(config);
     let bind = state.config.bind.clone();

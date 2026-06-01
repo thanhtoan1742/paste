@@ -60,17 +60,11 @@ fn default_admin_password() -> String {
     "admin".to_string()
 }
 
-pub fn load() -> Config {
-    let mut config = match std::fs::read_to_string("paste.toml") {
-        Ok(s) => match toml::from_str(&s) {
-            Ok(c) => c,
-            Err(e) => {
-                eprintln!("warning: failed to parse paste.toml: {e}; using defaults");
-                Config::default()
-            }
-        },
-        Err(_) => Config::default(),
-    };
+pub fn load(path: &str) -> Result<Config, String> {
+    let s = std::fs::read_to_string(path)
+        .map_err(|e| format!("config file not found: {path}: {e}"))?;
+    let mut config: Config = toml::from_str(&s)
+        .map_err(|e| format!("failed to parse config {path}: {e}"))?;
 
     normalize_prefix(&mut config);
 
@@ -78,7 +72,7 @@ pub fn load() -> Config {
         eprintln!("warning: using default admin credentials (admin:admin); set admin_user and admin_password in paste.toml");
     }
 
-    config
+    Ok(config)
 }
 
 fn normalize_prefix(config: &mut Config) {
