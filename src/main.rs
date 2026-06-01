@@ -126,7 +126,12 @@ async fn create_paste(
         }
     }
 
-    let id = nanoid::nanoid!(8);
+    let id = loop {
+        let id = nanoid::nanoid!(4);
+        if !state.pastes.read().await.contains_key(&id) {
+            break id;
+        }
+    };
 
     let entry = PasteEntry {
         content: form.content,
@@ -360,7 +365,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::SEE_OTHER);
         let loc = resp.headers().get(header::LOCATION).unwrap().to_str().unwrap();
         assert!(loc.starts_with('/'));
-        assert!(loc.len() == 9);
+        assert!(loc.len() == 5);
     }
 
     #[tokio::test]
