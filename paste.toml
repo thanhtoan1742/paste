@@ -2,3 +2,5 @@ bind = "0.0.0.0:3000"
 ttl_secs = 3600
 max_size = 8388608
 max_pastes = 512
+admin_user = "admin"
+admin_pass = "admin"
