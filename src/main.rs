@@ -1,4 +1,4 @@
-use axum::{routing::get, Router, extract::{State, Path, Form}, response::IntoResponse, middleware::{self, Next}, http::{StatusCode, header, Request}};
+use axum::{routing::get, Router, extract::{State, Path, Form}, response::IntoResponse, http::{StatusCode, header, Request}};
 use serde::Deserialize;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -69,33 +69,6 @@ struct AppState {
     config: Config,
 }
 
-async fn basic_auth(
-    State(state): State<Arc<AppState>>,
-    req: Request<axum::body::Body>,
-    next: Next,
-) -> impl IntoResponse {
-    let auth = req.headers().get(header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-
-    if let Some(encoded) = auth.strip_prefix("Basic ") {
-        if let Ok(decoded) = base64_decode(encoded) {
-            if let Ok(creds) = std::str::from_utf8(&decoded) {
-                if let Some((user, pass)) = creds.split_once(':') {
-                    if user == state.config.admin_user && pass == state.config.admin_pass {
-                        return Ok(next.run(req).await);
-                    }
-                }
-            }
-        }
-    }
-
-    Err((
-        StatusCode::UNAUTHORIZED,
-        [(header::WWW_AUTHENTICATE, r#"Basic realm="paste admin""#)],
-    ))
-}
-
 fn base64_decode(input: &str) -> Result<Vec<u8>, ()> {
     const T: [i8; 128] = [
         -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
@@ -126,6 +99,12 @@ fn base64_decode(input: &str) -> Result<Vec<u8>, ()> {
         if !pad3 { out.push(((v[2] as u8 & 0x3) << 6) | (v[3] as u8)); }
     }
     Ok(out)
+}
+
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+     .replace('<', "&lt;")
+     .replace('>', "&gt;")
 }
 
 async fn home() -> impl IntoResponse {
@@ -182,7 +161,32 @@ async fn get_paste(
 
 async fn admin_page(
     State(state): State<Arc<AppState>>,
+    req: Request<axum::body::Body>,
 ) -> impl IntoResponse {
+    let auth = req.headers().get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+
+    if let Some(encoded) = auth.strip_prefix("Basic ") {
+        if let Ok(decoded) = base64_decode(encoded) {
+            if let Ok(creds) = std::str::from_utf8(&decoded) {
+                if let Some((user, pass)) = creds.split_once(':') {
+                    if user == state.config.admin_user && pass == state.config.admin_pass {
+                        return render_admin(&state).await;
+                    }
+                }
+            }
+        }
+    }
+
+    (
+        StatusCode::UNAUTHORIZED,
+        [(header::WWW_AUTHENTICATE, r#"Basic realm="paste admin""#)],
+        axum::response::Html(String::new()),
+    ).into_response()
+}
+
+async fn render_admin(state: &Arc<AppState>) -> axum::response::Response {
     let pastes = state.pastes.read().await;
     let now = Instant::now();
 
@@ -209,22 +213,11 @@ async fn admin_page(
     axum::response::Html(html).into_response()
 }
 
-fn html_escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-     .replace('<', "&lt;")
-     .replace('>', "&gt;")
-}
-
 fn build_app(state: Arc<AppState>) -> Router {
-    let admin = Router::new()
-        .route("/admin", get(admin_page))
-        .layer(middleware::from_fn_with_state(state.clone(), basic_auth))
-        .with_state(state.clone());
-
     Router::new()
         .route("/", get(home).post(create_paste))
         .route("/{id}", get(get_paste))
-        .merge(admin)
+        .route("/admin", get(admin_page))
         .with_state(state)
 }
 
@@ -451,6 +444,8 @@ mod tests {
         let app = test_app();
         let resp = app.oneshot(Request::builder().uri("/admin").body(Body::empty()).unwrap()).await.unwrap();
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        let www_auth = resp.headers().get(header::WWW_AUTHENTICATE).unwrap().to_str().unwrap();
+        assert_eq!(www_auth, r#"Basic realm="paste admin""#);
     }
 
     #[tokio::test]
@@ -464,6 +459,7 @@ mod tests {
                 .unwrap()
         ).await.unwrap();
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        assert!(resp.headers().get(header::WWW_AUTHENTICATE).is_some());
     }
 
     #[tokio::test]
@@ -482,6 +478,8 @@ mod tests {
                 .unwrap()
         ).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
+        let content_type = resp.headers().get(header::CONTENT_TYPE).unwrap().to_str().unwrap();
+        assert!(content_type.contains("text/html"));
         let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
         let html = std::str::from_utf8(&body).unwrap();
         assert!(html.contains("1 pastes"));
