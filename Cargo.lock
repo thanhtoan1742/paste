@@ -343,10 +343,12 @@ name = "paste"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "http",
  "nanoid",
  "serde",
  "tokio",
  "toml",
+ "tower",
 ]
 
 [[package]]
