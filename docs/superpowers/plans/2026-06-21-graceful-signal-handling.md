@@ -80,6 +80,7 @@ mod handlers;
 mod state;
 mod templates;
 
+use std::future::IntoFuture;
 use std::time::Instant;
 
 fn parse_config_path() -> String {
@@ -223,7 +224,8 @@ async fn main() {
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
     let server = axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal(shutdown_tx));
+        .with_graceful_shutdown(shutdown_signal(shutdown_tx))
+        .into_future();
     tokio::pin!(server);
 
     // Phase 1: run until a signal fires (or the server ends on its own).
@@ -261,6 +263,7 @@ async fn main() {
 Design notes for the implementer:
 - The only change to the sweeper `tokio::spawn(...)` block is storing its return value in `let sweeper =` instead of discarding it. The spawn body is unchanged.
 - `tokio::pin!(server)` pins the `Serve` future on the stack so we can poll it by reference in both Phase 1's `select!` and Phase 2's `timeout`.
+- `.into_future()` is required because axum 0.8's `WithGracefulShutdown` implements `IntoFuture`, not `Future` directly. Calling `.into_future()` produces a concrete `Future` type that can be pinned and polled by reference. This requires `use std::future::IntoFuture;` at the top of the file.
 - **Phase 1** (`select!`): if `shutdown_rx` fires first, a signal was received and `shutdown_signal()` completing has told axum to stop accepting new connections. If `&mut server` completes first, the server ended on its own (bind/serve error) — log and exit non-zero.
 - **Phase 2** (`timeout`): `&mut server` is still valid after the `select!` because only the reference was polled, not consumed. The `timeout` races the drain against 10 seconds.
 - `TcpListener::bind` replaces `.unwrap()` with a clean error message, non-zero exit, and sweeper abort — consistent with the existing config-load error path.
