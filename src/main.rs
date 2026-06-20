@@ -97,6 +97,10 @@ async fn main() {
 
     // Phase 1: run until a signal fires (or the server ends on its own).
     tokio::select! {
+        biased;
+        _ = shutdown_rx => {
+            // Signal received; axum has stopped accepting new connections.
+        }
         res = &mut server => {
             match res {
                 Ok(()) => eprintln!("server exited before any signal"),
@@ -104,9 +108,6 @@ async fn main() {
             }
             sweeper.abort();
             std::process::exit(1);
-        }
-        _ = shutdown_rx => {
-            // Signal received; axum has stopped accepting new connections.
         }
     }
 

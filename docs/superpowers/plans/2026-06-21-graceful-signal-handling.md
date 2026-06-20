@@ -229,12 +229,24 @@ async fn main() {
     tokio::pin!(server);
 
     // Phase 1: run until a signal fires (or the server ends on its own).
+    // `biased;` ensures shutdown_rx is checked first — without it, when a signal
+    // fires and the server drain completes quickly (no in-flight requests),
+    // both branches are ready and select! may pick the server branch,
+    // falsely reporting "server exited before any signal".
     tokio::select! {
+        biased;
+        _ = shutdown_rx => {
+            // Signal received; axum has stopped accepting new connections.
+        }
         res = &mut server => {
             match res {
                 Ok(()) => eprintln!("server exited before any signal"),
                 Err(e) => eprintln!("server error: {e}"),
             }
+            sweeper.abort();
+            std::process::exit(1);
+        }
+    }
             sweeper.abort();
             std::process::exit(1);
         }
