@@ -24,22 +24,30 @@ pub fn view_page(prefix: &str, content: &str) -> String {
 <html><head><title>paste</title><style>{}</style></head>
 <body>
 <main>
-<button class="copy" onclick="navigator.clipboard.writeText([...document.querySelectorAll('.ln')].map(b=>b.dataset.line).join('\n'));this.textContent='copied!';setTimeout(()=>this.textContent='copy',1500)">copy</button>
+<button class="copy" onclick="copyText([...document.querySelectorAll('.ln')].map(b=>b.dataset.line).join('\n'));this.textContent='copied!';setTimeout(()=>this.textContent='copy',1500)">copy</button>
 <a class="home" href="{}">home</a>
 <div class="lines">
 {}
 </div>
 <script>
+function copyText(text){{
+ if(navigator.clipboard && window.isSecureContext){{ return navigator.clipboard.writeText(text); }}
+ var ta=document.createElement('textarea'); ta.value=text;
+ ta.style.position='fixed'; ta.style.opacity='0';
+ document.body.appendChild(ta); ta.focus(); ta.select();
+ try{{ document.execCommand('copy'); }}catch(e){{}}
+ document.body.removeChild(ta);
+}}
 let sel=null;
 function toggleLine(el){{
  if(sel===el){{
-  navigator.clipboard.writeText(el.querySelector('.ln').dataset.line);
+  copyText(el.querySelector('.ln').dataset.line);
   el.classList.add('copied');setTimeout(()=>el.classList.remove('copied'),1200);
  }}else{{ if(sel)sel.classList.remove('selected'); sel=el; el.classList.add('selected'); }}
 }}
 function copyLine(e,btn){{
  e.stopPropagation();
- navigator.clipboard.writeText(btn.dataset.line);
+ copyText(btn.dataset.line);
  var el=btn.closest('.line');
  el.classList.add('copied');setTimeout(()=>el.classList.remove('copied'),1200);
 }}
@@ -400,6 +408,25 @@ mod tests {
         assert!(html.contains("function copyLine"));
         assert!(html.contains("classList.add('selected')"));
         assert!(html.contains("classList.add('copied')"));
+    }
+
+    #[test]
+    fn view_page_has_copy_text_helper() {
+        let html = view_page("", "anything");
+        assert!(html.contains("function copyText"));
+        assert!(html.contains("isSecureContext"));
+    }
+
+    #[test]
+    fn view_page_copy_falls_back_to_exec_command() {
+        let html = view_page("", "anything");
+        assert!(html.contains("document.execCommand('copy')"));
+    }
+
+    #[test]
+    fn view_page_copy_all_uses_copy_text() {
+        let html = view_page("", "anything");
+        assert!(html.contains("copyText([...document.querySelectorAll('.ln')"));
     }
 
     #[test]
