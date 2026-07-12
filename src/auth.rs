@@ -88,7 +88,7 @@ pub fn unauthorized_response() -> (
 ) {
     (
         StatusCode::UNAUTHORIZED,
-        [(header::WWW_AUTHENTICATE, r#"Basic realm="paste admin""#)],
+        [(header::WWW_AUTHENTICATE, r#"Basic realm="paste""#)],
         axum::response::Html(String::new()),
     )
 }

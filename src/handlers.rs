@@ -93,14 +93,20 @@ async fn security_headers(req: Request<Body>, next: Next) -> Response {
     response
 }
 
-async fn home(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    axum::response::Html(templates::submit_page(&state.config.prefix))
-}
-
 async fn create_paste(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Form(form): Form<PasteForm>,
 ) -> impl IntoResponse {
+    let auth = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+
+    if !check_basic_auth(auth, &state.config.user, &state.config.password) {
+        return unauthorized_response().into_response();
+    }
+
     if form.content.len() > state.config.max_size {
         return StatusCode::PAYLOAD_TOO_LARGE.into_response();
     }
@@ -212,12 +218,12 @@ async fn delete_paste(
 
     state.pastes.write().await.remove(&id);
 
-    let admin_path = if state.config.prefix.is_empty() {
-        "/admin".to_string()
+    let home_path = if state.config.prefix.is_empty() {
+        "/".to_string()
     } else {
-        format!("{}/admin", state.config.prefix)
+        state.config.prefix.clone()
     };
-    axum::response::Redirect::to(&admin_path).into_response()
+    axum::response::Redirect::to(&home_path).into_response()
 }
 
 async fn render_admin(state: &Arc<AppState>) -> axum::response::Response {
@@ -232,12 +238,12 @@ async fn render_admin(state: &Arc<AppState>) -> axum::response::Response {
         let secs_left = entry.expires_at.duration_since(now).as_secs();
         let human = format_duration(secs_left);
         rows.push_str(&format!(
-            "<tr><td><a href=\"{}/{}\">{}</a></td><td>{}</td><td>{}...</td><td><form method=\"POST\" action=\"{}/admin/{}/delete\"><button type=\"submit\">delete</button></form></td></tr>",
+            "<tr><td><a href=\"{}/{}\">{}</a></td><td>{}</td><td>{}...</td><td><form method=\"POST\" action=\"{}/{}/delete\"><button type=\"submit\">delete</button></form></td></tr>",
             prefix, escaped_id, escaped_id, human, preview, prefix, escaped_id
         ));
     }
 
-    axum::response::Html(templates::admin_page(pastes.len(), &rows)).into_response()
+    axum::response::Html(templates::admin_page(prefix, pastes.len(), &rows)).into_response()
 }
 
 pub fn build_app(state: Arc<AppState>) -> Router {
@@ -246,10 +252,9 @@ pub fn build_app(state: Arc<AppState>) -> Router {
     let state_for_lockdown = state.clone();
 
     let inner = Router::new()
-        .route("/", get(home).post(create_paste))
+        .route("/", get(admin_page).post(create_paste))
         .route("/{id}", get(get_paste))
-        .route("/admin", get(admin_page))
-        .route("/admin/{id}/delete", post(delete_paste))
+        .route("/{id}/delete", post(delete_paste))
         .with_state(state)
         .layer(axum::extract::DefaultBodyLimit::max(body_limit))
         .layer(middleware::from_fn_with_state(
@@ -327,17 +332,42 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn home_returns_submit_form() {
+    async fn root_rejects_no_auth() {
         let app = test_app();
         let resp = app
             .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn root_shows_dashboard_with_auth() {
+        let state = test_state();
+        state.pastes.write().await.insert(
+            "dash01".to_string(),
+            PasteEntry {
+                content: "dash content".to_string(),
+                expires_at: Instant::now() + std::time::Duration::from_secs(3600),
+            },
+        );
+        let app = build_app(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/")
+                    .header(header::AUTHORIZATION, encode_basic_auth("user", "secret"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         let body = axum::body::to_bytes(resp.into_body(), 8192).await.unwrap();
         let html = std::str::from_utf8(&body).unwrap();
         assert!(html.contains("<textarea"));
-        assert!(html.contains("paste"));
+        assert!(html.contains("1 pastes"));
+        assert!(html.contains("dash01"));
     }
 
     #[tokio::test]
@@ -349,6 +379,7 @@ mod tests {
                     .method("POST")
                     .uri("/")
                     .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .header(header::AUTHORIZATION, encode_basic_auth("user", "secret"))
                     .body(Body::from("content=hello"))
                     .unwrap(),
             )
@@ -375,6 +406,7 @@ mod tests {
                     .method("POST")
                     .uri("/")
                     .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .header(header::AUTHORIZATION, encode_basic_auth("user", "secret"))
                     .body(Body::from(format!("content={}", big)))
                     .unwrap(),
             )
@@ -402,6 +434,7 @@ mod tests {
                     .method("POST")
                     .uri("/")
                     .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .header(header::AUTHORIZATION, encode_basic_auth("user", "secret"))
                     .body(Body::from("content=hello"))
                     .unwrap(),
             )
@@ -485,12 +518,7 @@ mod tests {
     async fn admin_rejects_no_auth() {
         let app = test_app();
         let resp = app
-            .oneshot(
-                Request::builder()
-                    .uri("/admin")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
@@ -500,7 +528,7 @@ mod tests {
             .unwrap()
             .to_str()
             .unwrap();
-        assert_eq!(www_auth, r#"Basic realm="paste admin""#);
+        assert_eq!(www_auth, r#"Basic realm="paste""#);
     }
 
     #[tokio::test]
@@ -509,7 +537,7 @@ mod tests {
         let resp = app
             .oneshot(
                 Request::builder()
-                    .uri("/admin")
+                    .uri("/")
                     .header(header::AUTHORIZATION, encode_basic_auth("user", "wrong"))
                     .body(Body::empty())
                     .unwrap(),
@@ -534,7 +562,7 @@ mod tests {
         let resp = app
             .oneshot(
                 Request::builder()
-                    .uri("/admin")
+                    .uri("/")
                     .header(header::AUTHORIZATION, encode_basic_auth("user", "secret"))
                     .body(Body::empty())
                     .unwrap(),
@@ -572,7 +600,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/admin/del1/delete")
+                    .uri("/del1/delete")
                     .header(header::AUTHORIZATION, encode_basic_auth("user", "secret"))
                     .body(Body::empty())
                     .unwrap(),
@@ -582,7 +610,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::SEE_OTHER);
         assert_eq!(
             resp.headers().get(header::LOCATION).unwrap().to_str().unwrap(),
-            "/admin"
+            "/"
         );
         assert!(state.pastes.read().await.get("del1").is_none());
     }
@@ -602,7 +630,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/admin/del2/delete")
+                    .uri("/del2/delete")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -621,6 +649,7 @@ mod tests {
                     .method("POST")
                     .uri("/")
                     .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .header(header::AUTHORIZATION, encode_basic_auth("user", "secret"))
                     .body(Body::from("content=hello&ttl=30"))
                     .unwrap(),
             )
@@ -638,6 +667,7 @@ mod tests {
                     .method("POST")
                     .uri("/")
                     .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .header(header::AUTHORIZATION, encode_basic_auth("user", "secret"))
                     .body(Body::from("content=hello&ttl=15&ttl_custom=45"))
                     .unwrap(),
             )
@@ -655,6 +685,7 @@ mod tests {
                     .method("POST")
                     .uri("/")
                     .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .header(header::AUTHORIZATION, encode_basic_auth("user", "secret"))
                     .body(Body::from("content=hello&ttl=30&ttl_custom="))
                     .unwrap(),
             )
@@ -672,6 +703,7 @@ mod tests {
                     .method("POST")
                     .uri("/")
                     .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .header(header::AUTHORIZATION, encode_basic_auth("user", "secret"))
                     .body(Body::from("content=hello&ttl_custom=1500"))
                     .unwrap(),
             )
@@ -717,6 +749,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .uri("/paste")
+                    .header(header::AUTHORIZATION, encode_basic_auth("user", "secret"))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -748,6 +781,7 @@ mod tests {
                     .method("POST")
                     .uri("/paste")
                     .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .header(header::AUTHORIZATION, encode_basic_auth("user", "secret"))
                     .body(Body::from("content=new"))
                     .unwrap(),
             )
@@ -831,7 +865,7 @@ mod tests {
         let resp = app
             .oneshot(
                 Request::builder()
-                    .uri("/admin")
+                    .uri("/")
                     .header(
                         header::AUTHORIZATION,
                         encode_basic_auth("lockuser", "lockpass"),
@@ -847,7 +881,7 @@ mod tests {
         let resp = app
             .oneshot(
                 Request::builder()
-                    .uri("/admin")
+                    .uri("/")
                     .header(
                         header::AUTHORIZATION,
                         encode_basic_auth("wrong", "creds"),
@@ -864,24 +898,24 @@ mod tests {
     async fn trailing_slash_redirects() {
         let app = test_app();
         let resp = app
-            .oneshot(Request::builder().uri("/admin/").body(Body::empty()).unwrap())
+            .oneshot(Request::builder().uri("/foo/").body(Body::empty()).unwrap())
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::PERMANENT_REDIRECT);
-        assert_eq!(resp.headers().get(header::LOCATION).unwrap(), "/admin");
+        assert_eq!(resp.headers().get(header::LOCATION).unwrap(), "/foo");
     }
 
     #[tokio::test]
     async fn trailing_slash_redirects_with_prefix() {
         let app = build_app(prefixed_state());
         let resp = app
-            .oneshot(Request::builder().uri("/paste/admin/").body(Body::empty()).unwrap())
+            .oneshot(Request::builder().uri("/paste/foo/").body(Body::empty()).unwrap())
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::PERMANENT_REDIRECT);
         assert_eq!(
             resp.headers().get(header::LOCATION).unwrap(),
-            "/paste/admin"
+            "/paste/foo"
         );
     }
 
@@ -889,7 +923,13 @@ mod tests {
     async fn root_no_redirect() {
         let app = test_app();
         let resp = app
-            .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/")
+                    .header(header::AUTHORIZATION, encode_basic_auth("user", "secret"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);

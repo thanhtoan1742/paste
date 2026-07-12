@@ -9,7 +9,7 @@ Pastes are stored in memory and expire after a configurable TTL. No database, no
 - Short 4-character IDs with collision handling
 - Auto-expiring pastes with configurable TTL (presets or custom)
 - Copy-to-clipboard button on paste view
-- Admin page with HTTP Basic Auth (uses the regular user credentials) showing all active pastes
+- Admin dashboard at `/` with HTTP Basic Auth (uses the regular user credentials) showing all active pastes and a submit form
 - Optional lockdown mode requiring authentication for all routes
 - Dark mode via `prefers-color-scheme`
 - Security headers (HSTS, X-Content-Type-Options, X-Frame-Options)
@@ -30,10 +30,10 @@ The server listens on `0.0.0.0:3000` by default. Open it in a browser, paste you
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/` | Submit form |
-| POST | `/` | Create paste (form-encoded `content`, `ttl`, `ttl_custom`) |
+| GET | `/` | Admin dashboard + submit form (Basic Auth) |
+| POST | `/` | Create paste (Basic Auth; form-encoded `content`, `ttl`, `ttl_custom`) |
 | GET | `/{id}` | View paste |
-| GET | `/admin` | Admin dashboard (requires Basic Auth with `user`/`password`) |
+| POST | `/{id}/delete` | Delete paste (Basic Auth) |
 
 ## Configuration
 
@@ -46,8 +46,8 @@ default_ttl_mins = 15          # Default TTL when none selected
 max_size = 8388608             # Max paste size in bytes (8MB)
 max_pastes = 512               # Max active pastes
 lockdown = false               # Require auth for all routes
-user = "user"                  # Username (auths /admin and lockdown)
-password = "change_me"         # Password (auths /admin and lockdown)
+user = "user"                  # Username (auths dashboard, paste creation, and lockdown)
+password = "change_me"         # Password (auths dashboard, paste creation, and lockdown)
 ```
 
 Defaults are used for any missing fields. A warning is printed if the default credentials (`user:pass`) are active.
