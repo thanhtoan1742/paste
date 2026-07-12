@@ -24,8 +24,82 @@ pub fn view_page(content: &str) -> String {
 </main>
 </body></html>"#,
         STYLE_STR,
-        html_escape(content)
+        linkify(content)
     )
+}
+
+fn linkify(content: &str) -> String {
+    let bytes = content.as_bytes();
+    let mut out = String::with_capacity(content.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if let Some(end) = match_url(&bytes[i..]) {
+            let url = &content[i..i + end];
+            let url = strip_trailing_punct(url);
+            let esc = escape_attr(url);
+            out.push_str(&format!(
+                "<a href=\"{}\" target=\"_blank\" rel=\"noopener noreferrer\">{}</a>",
+                esc, esc
+            ));
+            i += end;
+        } else {
+            push_escaped_char(&mut out, bytes[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
+fn match_url(bytes: &[u8]) -> Option<usize> {
+    const SCHEMES: [&[u8]; 2] = [b"http://", b"https://"];
+    for scheme in SCHEMES {
+        if bytes.len() >= scheme.len() && &bytes[..scheme.len()] == scheme {
+            let mut end = scheme.len();
+            while end < bytes.len() {
+                let c = bytes[end];
+                if c.is_ascii_whitespace() || matches!(c, b'<' | b'>' | b'"' | b'\'') {
+                    break;
+                }
+                end += 1;
+            }
+            return Some(end);
+        }
+    }
+    None
+}
+
+fn strip_trailing_punct(url: &str) -> &str {
+    let mut end = url.len();
+    while end > 0 {
+        match url.as_bytes()[end - 1] {
+            b'.' | b',' | b';' | b'!' | b'?' | b')' => end -= 1,
+            _ => break,
+        }
+    }
+    &url[..end]
+}
+
+fn escape_attr(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'&' => out.push_str("&amp;"),
+            b'<' => out.push_str("&lt;"),
+            b'>' => out.push_str("&gt;"),
+            b'"' => out.push_str("&quot;"),
+            _ => out.push(b as char),
+        }
+    }
+    out
+}
+
+fn push_escaped_char(out: &mut String, b: u8) {
+    match b {
+        b'&' => out.push_str("&amp;"),
+        b'<' => out.push_str("&lt;"),
+        b'>' => out.push_str("&gt;"),
+        _ => out.push(b as char),
+    }
 }
 
 pub fn admin_page(prefix: &str, count: usize, rows: &str) -> String {
@@ -133,5 +207,138 @@ mod tests {
     fn error_page_back_link_prefix() {
         let html = error_page("/paste", "oops");
         assert!(html.contains("href=\"/paste\""));
+    }
+
+    #[test]
+    fn linkify_wraps_http_url() {
+        assert_eq!(
+            linkify("http://example.com"),
+            "<a href=\"http://example.com\" target=\"_blank\" rel=\"noopener noreferrer\">http://example.com</a>"
+        );
+    }
+
+    #[test]
+    fn linkify_wraps_https_url() {
+        assert_eq!(
+            linkify("https://example.com"),
+            "<a href=\"https://example.com\" target=\"_blank\" rel=\"noopener noreferrer\">https://example.com</a>"
+        );
+    }
+
+    #[test]
+    fn linkify_plain_text_unchanged() {
+        assert_eq!(linkify("hello world"), "hello world");
+    }
+
+    #[test]
+    fn linkify_escapes_html_in_plain_text() {
+        assert_eq!(linkify("a < b & c > d"), "a &lt; b &amp; c &gt; d");
+    }
+
+    #[test]
+    fn linkify_multiple_urls() {
+        let out = linkify("see https://a.com and https://b.com");
+        assert!(out.contains("<a href=\"https://a.com\""));
+        assert!(out.contains("<a href=\"https://b.com\""));
+    }
+
+    #[test]
+    fn linkify_strips_trailing_punct() {
+        let out = linkify("visit https://example.com.");
+        assert!(out.contains("href=\"https://example.com\""));
+        assert!(!out.contains("example.com.\""));
+        let out = linkify("(see https://example.com)");
+        assert!(out.contains("href=\"https://example.com\""));
+        assert!(out.contains("(see <a "));
+        assert!(!out.contains("example.com)"));
+    }
+
+    #[test]
+    fn linkify_escapes_ampersand_in_query() {
+        let out = linkify("https://example.com/?a=1&b=2");
+        assert!(out.contains("href=\"https://example.com/?a=1&amp;b=2\""));
+    }
+
+    #[test]
+    fn linkify_preserves_surrounding_escape() {
+        let out = linkify("<b> see https://x.com </b>");
+        assert!(out.contains("&lt;b&gt;"));
+        assert!(out.contains("&lt;/b&gt;"));
+        assert!(out.contains("<a href=\"https://x.com\""));
+    }
+
+    #[test]
+    fn linkify_opens_new_tab() {
+        let out = linkify("https://example.com");
+        assert!(out.contains("target=\"_blank\""));
+        assert!(out.contains("rel=\"noopener noreferrer\""));
+    }
+
+    #[test]
+    fn linkify_text_content_yields_raw() {
+        let original = "see https://example.com/?a=1&b=2 here";
+        let linkified = linkify(original);
+        let stripped = strip_tags_and_decode(&linkified);
+        assert_eq!(stripped, original);
+    }
+
+    #[test]
+    fn linkify_no_javascript_scheme() {
+        let out = linkify("javascript:alert(1)");
+        assert!(!out.contains("<a "));
+        assert!(out.contains("javascript:alert(1)"));
+    }
+
+    #[test]
+    fn view_page_linkifies_content() {
+        let html = view_page("visit https://example.com");
+        assert!(html.contains("<a href=\"https://example.com\""));
+    }
+
+    #[test]
+    fn view_page_copy_button_targets_content() {
+        let html = view_page("anything");
+        assert!(html.contains("getElementById('content')"));
+        assert!(html.contains("id=\"content\""));
+        assert!(html.contains(">copy<"));
+    }
+
+    fn strip_tags_and_decode(s: &str) -> String {
+        let mut out = String::new();
+        let mut in_tag = false;
+        let mut chars = s.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c == '<' {
+                in_tag = true;
+                continue;
+            }
+            if c == '>' {
+                in_tag = false;
+                continue;
+            }
+            if in_tag {
+                continue;
+            }
+            if c == '&' {
+                let mut entity = String::from('&');
+                while let Some(&nc) = chars.peek() {
+                    entity.push(nc);
+                    chars.next();
+                    if nc == ';' {
+                        break;
+                    }
+                }
+                match entity.as_str() {
+                    "&amp;" => out.push('&'),
+                    "&lt;" => out.push('<'),
+                    "&gt;" => out.push('>'),
+                    "&quot;" => out.push('"'),
+                    other => out.push_str(other),
+                }
+            } else {
+                out.push(c);
+            }
+        }
+        out
     }
 }
