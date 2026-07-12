@@ -29,6 +29,21 @@ pub fn view_page(prefix: &str, content: &str) -> String {
 <div class="lines">
 {}
 </div>
+<script>
+let sel=null;
+function toggleLine(el){{
+ if(sel===el){{
+  navigator.clipboard.writeText(el.querySelector('.ln').dataset.line);
+  el.classList.add('copied');setTimeout(()=>el.classList.remove('copied'),1200);
+ }}else{{ if(sel)sel.classList.remove('selected'); sel=el; el.classList.add('selected'); }}
+}}
+function copyLine(e,btn){{
+ e.stopPropagation();
+ navigator.clipboard.writeText(btn.dataset.line);
+ var el=btn.closest('.line');
+ el.classList.add('copied');setTimeout(()=>el.classList.remove('copied'),1200);
+}}
+</script>
 </main>
 </body></html>"#,
         STYLE_STR,
@@ -43,7 +58,7 @@ fn render_lines(content: &str) -> String {
         let line = line.strip_suffix('\r').unwrap_or(line);
         let n = i + 1;
         out.push_str(&format!(
-            "<div class=\"line\"><button class=\"ln\" data-line=\"{}\" onclick=\"navigator.clipboard.writeText(this.dataset.line);this.classList.add('copied');setTimeout(()=>this.classList.remove('copied'),1200)\">{}</button><span class=\"lt\">{}</span></div>",
+            "<div class=\"line\" onclick=\"toggleLine(this)\"><button class=\"ln\" data-line=\"{}\" onclick=\"copyLine(event,this)\">{}</button><span class=\"lt\">{}</span></div>",
             escape_attr(line),
             n,
             linkify(line)
@@ -361,6 +376,30 @@ mod tests {
     fn view_page_linkify_per_line() {
         let html = view_page("", "see https://example.com\nno url here");
         assert!(html.contains("<a href=\"https://example.com\""));
+    }
+
+    #[test]
+    fn view_page_line_has_toggle_handler() {
+        let html = view_page("", "line one\nline two");
+        assert!(html.contains("onclick=\"toggleLine(this)\""));
+        assert!(html.contains("class=\"line\""));
+    }
+
+    #[test]
+    fn view_page_line_number_direct_copy_handler() {
+        let html = view_page("", "anything");
+        assert!(html.contains("copyLine(event,this)"));
+        assert!(html.contains("stopPropagation"));
+    }
+
+    #[test]
+    fn view_page_has_selection_script() {
+        let html = view_page("", "anything");
+        assert!(html.contains("<script>"));
+        assert!(html.contains("function toggleLine"));
+        assert!(html.contains("function copyLine"));
+        assert!(html.contains("classList.add('selected')"));
+        assert!(html.contains("classList.add('copied')"));
     }
 
     #[test]

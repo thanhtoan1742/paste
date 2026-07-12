@@ -11,6 +11,8 @@
   --accent: #0d47a1;
   --accent-hover: #1266e2;
   --accent-text: #fff;
+  --copied-bg: #e3f6e3;
+  --copied-border: #2e8b57;
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -22,6 +24,8 @@
     --accent: #ffb300;
     --accent-hover: #ffe099;
     --accent-text: #212121;
+    --copied-bg: #1f3d2a;
+    --copied-border: #66bb6a;
   }
 }
 *, *::before, *::after { box-sizing: border-box; }
@@ -113,9 +117,17 @@ a.home:hover {
   display: flex;
   align-items: stretch;
   border-radius: 3px;
+  cursor: pointer;
 }
 .line:hover {
   background-color: var(--bg);
+}
+.line.selected {
+  background-color: var(--bg);
+}
+.line.copied {
+  background-color: var(--copied-bg);
+  box-shadow: inset 3px 0 0 var(--copied-border);
 }
 .ln {
   flex: 0 0 auto;
@@ -136,8 +148,8 @@ a.home:hover {
   color: var(--accent-text);
 }
 .ln.copied {
-  background-color: var(--accent-hover);
-  color: var(--accent-text);
+  background-color: transparent;
+  color: var(--text-light);
 }
 .lt {
   flex: 1;
