@@ -9,7 +9,8 @@ Pastes are stored in memory and expire after a configurable TTL. No database, no
 - Short 4-character IDs with collision handling
 - Auto-expiring pastes with configurable TTL (presets or custom)
 - Copy-to-clipboard button on paste view
-- Admin page with HTTP Basic Auth showing all active pastes
+- Admin page with HTTP Basic Auth (uses the regular user credentials) showing all active pastes
+- Optional lockdown mode requiring authentication for all routes
 - Dark mode via `prefers-color-scheme`
 - Security headers (HSTS, X-Content-Type-Options, X-Frame-Options)
 - Constant-time credential comparison
@@ -32,7 +33,7 @@ The server listens on `0.0.0.0:3000` by default. Open it in a browser, paste you
 | GET | `/` | Submit form |
 | POST | `/` | Create paste (form-encoded `content`, `ttl`, `ttl_custom`) |
 | GET | `/{id}` | View paste |
-| GET | `/admin` | Admin dashboard (requires Basic Auth) |
+| GET | `/admin` | Admin dashboard (requires Basic Auth with `user`/`password`) |
 
 ## Configuration
 
@@ -44,11 +45,12 @@ max_ttl_secs = 86400           # Maximum paste lifetime (24h)
 default_ttl_mins = 15          # Default TTL when none selected
 max_size = 8388608             # Max paste size in bytes (8MB)
 max_pastes = 512               # Max active pastes
-admin_user = "admin"           # Admin username
-admin_password = "change_me"    # Admin password
+lockdown = false               # Require auth for all routes
+user = "user"                  # Username (auths /admin and lockdown)
+password = "change_me"         # Password (auths /admin and lockdown)
 ```
 
-Defaults are used for any missing fields. A warning is printed if the default credentials (`admin:admin`) are active.
+Defaults are used for any missing fields. A warning is printed if the default credentials (`user:pass`) are active.
 
 ## TTL
 

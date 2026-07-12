@@ -58,9 +58,7 @@ async fn lockdown_auth(
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
-    let lockdown_ok = check_basic_auth(auth, &state.config.lockdown_user, &state.config.lockdown_password);
-    let admin_ok = check_basic_auth(auth, &state.config.admin_user, &state.config.admin_password);
-    if lockdown_ok || admin_ok {
+    if check_basic_auth(auth, &state.config.user, &state.config.password) {
         next.run(req).await
     } else {
         unauthorized_response().into_response()
@@ -191,11 +189,7 @@ async fn admin_page(State(state): State<Arc<AppState>>, headers: HeaderMap) -> i
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
 
-    let admin_ok = check_basic_auth(auth, &state.config.admin_user, &state.config.admin_password);
-    let lockdown_ok = state.config.lockdown
-        && check_basic_auth(auth, &state.config.lockdown_user, &state.config.lockdown_password);
-
-    if admin_ok || lockdown_ok {
+    if check_basic_auth(auth, &state.config.user, &state.config.password) {
         return render_admin(&state).await;
     }
 
@@ -212,11 +206,7 @@ async fn delete_paste(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
 
-    let admin_ok = check_basic_auth(auth, &state.config.admin_user, &state.config.admin_password);
-    let lockdown_ok = state.config.lockdown
-        && check_basic_auth(auth, &state.config.lockdown_user, &state.config.lockdown_password);
-
-    if !admin_ok && !lockdown_ok {
+    if !check_basic_auth(auth, &state.config.user, &state.config.password) {
         return unauthorized_response().into_response();
     }
 
@@ -296,11 +286,9 @@ mod tests {
                 default_ttl_mins: 15,
                 max_size: 100,
                 max_pastes: 2,
-                admin_user: "admin".to_string(),
-                admin_password: "secret".to_string(),
                 lockdown: false,
-                lockdown_user: "user".to_string(),
-                lockdown_password: "pass".to_string(),
+                user: "user".to_string(),
+                password: "secret".to_string(),
             },
         })
     }
@@ -522,7 +510,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .uri("/admin")
-                    .header(header::AUTHORIZATION, encode_basic_auth("admin", "wrong"))
+                    .header(header::AUTHORIZATION, encode_basic_auth("user", "wrong"))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -547,7 +535,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .uri("/admin")
-                    .header(header::AUTHORIZATION, encode_basic_auth("admin", "secret"))
+                    .header(header::AUTHORIZATION, encode_basic_auth("user", "secret"))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -585,7 +573,7 @@ mod tests {
                 Request::builder()
                     .method("POST")
                     .uri("/admin/del1/delete")
-                    .header(header::AUTHORIZATION, encode_basic_auth("admin", "secret"))
+                    .header(header::AUTHORIZATION, encode_basic_auth("user", "secret"))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -705,11 +693,9 @@ mod tests {
                 default_ttl_mins: 15,
                 max_size: 100,
                 max_pastes: 2,
-                admin_user: "admin".to_string(),
-                admin_password: "secret".to_string(),
                 lockdown: false,
-                lockdown_user: "user".to_string(),
-                lockdown_password: "pass".to_string(),
+                user: "user".to_string(),
+                password: "secret".to_string(),
             },
         })
     }
@@ -787,11 +773,9 @@ mod tests {
                 default_ttl_mins: 15,
                 max_size: 100,
                 max_pastes: 2,
-                admin_user: "admin".to_string(),
-                admin_password: "adminsecret".to_string(),
                 lockdown: true,
-                lockdown_user: "lockuser".to_string(),
-                lockdown_password: "lockpass".to_string(),
+                user: "lockuser".to_string(),
+                password: "lockpass".to_string(),
             },
         })
     }
@@ -842,7 +826,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn lockdown_admin_uses_admin_creds() {
+    async fn lockdown_admin_uses_user_creds() {
         let app = build_app(lockdown_state());
         let resp = app
             .oneshot(
@@ -851,22 +835,6 @@ mod tests {
                     .header(
                         header::AUTHORIZATION,
                         encode_basic_auth("lockuser", "lockpass"),
-                    )
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
-
-        let app = build_app(lockdown_state());
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .uri("/admin")
-                    .header(
-                        header::AUTHORIZATION,
-                        encode_basic_auth("admin", "adminsecret"),
                     )
                     .body(Body::empty())
                     .unwrap(),
