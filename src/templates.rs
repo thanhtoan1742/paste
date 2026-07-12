@@ -24,7 +24,7 @@ pub fn view_page(prefix: &str, content: &str) -> String {
 <html><head><title>paste</title><style>{}</style></head>
 <body>
 <main>
-<button class="copy" onclick="copyText([...document.querySelectorAll('.ln')].map(b=>b.dataset.line).join('\n'));this.textContent='copied!';setTimeout(()=>this.textContent='copy',1500)">copy</button>
+<button class="copy" onclick="copyText([...document.querySelectorAll('.ln')].map(b=>b.dataset.line).join('\n'));flashAllCopied();this.textContent='copied!';setTimeout(()=>this.textContent='copy',1500)">copy</button>
 <a class="home" href="{}">home</a>
 <div class="lines">
 {}
@@ -50,6 +50,11 @@ function copyLine(e,btn){{
  copyText(btn.dataset.line);
  var el=btn.closest('.line');
  el.classList.add('copied');setTimeout(()=>el.classList.remove('copied'),1200);
+}}
+function flashAllCopied(){{
+ var ls=document.querySelectorAll('.line');
+ ls.forEach(el=>el.classList.add('copied'));
+ setTimeout(()=>ls.forEach(el=>el.classList.remove('copied')),1200);
 }}
 </script>
 </main>
@@ -427,6 +432,13 @@ mod tests {
     fn view_page_copy_all_uses_copy_text() {
         let html = view_page("", "anything");
         assert!(html.contains("copyText([...document.querySelectorAll('.ln')"));
+    }
+
+    #[test]
+    fn view_page_copy_all_flashes_all_lines() {
+        let html = view_page("", "anything");
+        assert!(html.contains("function flashAllCopied"));
+        assert!(html.contains("flashAllCopied()"));
     }
 
     #[test]
