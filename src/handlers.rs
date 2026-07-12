@@ -186,7 +186,8 @@ async fn get_paste(
             .into_response();
     }
 
-    axum::response::Html(templates::view_page(&entry.content)).into_response()
+    axum::response::Html(templates::view_page(&state.config.prefix, &entry.content))
+        .into_response()
 }
 
 async fn admin_page(State(state): State<Arc<AppState>>, headers: HeaderMap) -> impl IntoResponse {
@@ -577,7 +578,7 @@ mod tests {
             .to_str()
             .unwrap();
         assert!(content_type.contains("text/html"));
-        let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), 8192).await.unwrap();
         let html = std::str::from_utf8(&body).unwrap();
         assert!(html.contains("1 pastes"));
         assert!(html.contains("abc12345"));

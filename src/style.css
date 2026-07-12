@@ -83,13 +83,65 @@ button.copy:hover {
   background-color: var(--accent-hover);
   border-color: var(--accent-hover);
 }
-pre {
+a.home {
+  background-color: var(--accent);
+  color: var(--accent-text);
+  border: 1px solid var(--accent);
+  border-radius: 5px;
+  padding: 0.5em 1.5em;
+  cursor: pointer;
+  font-family: var(--sans-font);
+  font-size: 0.85rem;
+  margin-bottom: 0.5rem;
+  margin-left: 0.5rem;
+  text-decoration: none;
+  display: inline-block;
+}
+a.home:hover {
+  background-color: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+.lines {
   font-family: var(--mono-font);
   background-color: var(--accent-bg);
   border: 1px solid var(--border);
   border-radius: 5px;
-  padding: 1rem 1.4rem;
+  padding: 0.5rem 0.25rem;
   overflow: auto;
+}
+.line {
+  display: flex;
+  align-items: stretch;
+  border-radius: 3px;
+}
+.line:hover {
+  background-color: var(--bg);
+}
+.ln {
+  flex: 0 0 auto;
+  min-width: 2.2em;
+  padding: 0 0.5rem;
+  border: none;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-light);
+  font-family: var(--mono-font);
+  font-size: 0.85rem;
+  text-align: right;
+  cursor: pointer;
+  user-select: none;
+}
+.ln:hover {
+  background-color: var(--accent);
+  color: var(--accent-text);
+}
+.ln.copied {
+  background-color: var(--accent-hover);
+  color: var(--accent-text);
+}
+.lt {
+  flex: 1;
   white-space: pre-wrap;
   word-wrap: break-word;
+  padding: 0 0.25rem;
 }

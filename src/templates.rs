@@ -13,19 +13,43 @@ pub fn not_found_page() -> String {
     )
 }
 
-pub fn view_page(content: &str) -> String {
+pub fn view_page(prefix: &str, content: &str) -> String {
+    let home = if prefix.is_empty() {
+        "/".to_string()
+    } else {
+        prefix.to_string()
+    };
     format!(
         r#"<!DOCTYPE html>
 <html><head><title>paste</title><style>{}</style></head>
 <body>
 <main>
-<button onclick="navigator.clipboard.writeText(document.getElementById('content').textContent);this.textContent='copied!';setTimeout(()=>this.textContent='copy',1500)">copy</button>
-<pre id="content">{}</pre>
+<button class="copy" onclick="navigator.clipboard.writeText([...document.querySelectorAll('.ln')].map(b=>b.dataset.line).join('\n'));this.textContent='copied!';setTimeout(()=>this.textContent='copy',1500)">copy</button>
+<a class="home" href="{}">home</a>
+<div class="lines">
+{}
+</div>
 </main>
 </body></html>"#,
         STYLE_STR,
-        linkify(content)
+        home,
+        render_lines(content)
     )
+}
+
+fn render_lines(content: &str) -> String {
+    let mut out = String::new();
+    for (i, line) in content.split('\n').enumerate() {
+        let line = line.strip_suffix('\r').unwrap_or(line);
+        let n = i + 1;
+        out.push_str(&format!(
+            "<div class=\"line\"><button class=\"ln\" data-line=\"{}\" onclick=\"navigator.clipboard.writeText(this.dataset.line);this.classList.add('copied');setTimeout(()=>this.classList.remove('copied'),1200)\">{}</button><span class=\"lt\">{}</span></div>",
+            escape_attr(line),
+            n,
+            linkify(line)
+        ));
+    }
+    out
 }
 
 fn linkify(content: &str) -> String {
@@ -291,16 +315,66 @@ mod tests {
 
     #[test]
     fn view_page_linkifies_content() {
-        let html = view_page("visit https://example.com");
+        let html = view_page("", "visit https://example.com");
         assert!(html.contains("<a href=\"https://example.com\""));
     }
 
     #[test]
-    fn view_page_copy_button_targets_content() {
-        let html = view_page("anything");
-        assert!(html.contains("getElementById('content')"));
-        assert!(html.contains("id=\"content\""));
+    fn view_page_copy_all_uses_line_buttons() {
+        let html = view_page("", "anything");
+        assert!(html.contains("querySelectorAll('.ln')"));
+        assert!(html.contains("join('\\n')"));
         assert!(html.contains(">copy<"));
+    }
+
+    #[test]
+    fn view_page_renders_line_numbers() {
+        let html = view_page("", "line one\nline two\nline three");
+        assert!(html.contains(">1<"));
+        assert!(html.contains(">2<"));
+        assert!(html.contains(">3<"));
+    }
+
+    #[test]
+    fn view_page_line_button_escapes_data_line() {
+        let html = view_page("", "a & b < c > d");
+        assert!(html.contains("data-line=\"a &amp; b &lt; c &gt; d\""));
+    }
+
+    #[test]
+    fn view_page_empty_lines_keep_numbers() {
+        let html = view_page("", "first\n\nthird");
+        assert!(html.contains(">1<"));
+        assert!(html.contains(">2<"));
+        assert!(html.contains(">3<"));
+    }
+
+    #[test]
+    fn view_page_strips_carriage_returns() {
+        let html = view_page("", "a\r\nb");
+        assert!(html.contains("data-line=\"a\""));
+        assert!(html.contains("data-line=\"b\""));
+        assert!(!html.contains("\r"));
+    }
+
+    #[test]
+    fn view_page_linkify_per_line() {
+        let html = view_page("", "see https://example.com\nno url here");
+        assert!(html.contains("<a href=\"https://example.com\""));
+    }
+
+    #[test]
+    fn view_page_home_link_root() {
+        let html = view_page("", "anything");
+        assert!(html.contains("href=\"/\""));
+        assert!(html.contains(">home<"));
+    }
+
+    #[test]
+    fn view_page_home_link_prefix() {
+        let html = view_page("/paste", "anything");
+        assert!(html.contains("href=\"/paste\""));
+        assert!(html.contains(">home<"));
     }
 
     fn strip_tags_and_decode(s: &str) -> String {
