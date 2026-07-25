@@ -133,13 +133,13 @@ fn strip_trailing_punct(url: &str) -> &str {
 
 fn escape_attr(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
-    for b in s.bytes() {
-        match b {
-            b'&' => out.push_str("&amp;"),
-            b'<' => out.push_str("&lt;"),
-            b'>' => out.push_str("&gt;"),
-            b'"' => out.push_str("&quot;"),
-            _ => out.push(b as char),
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            _ => out.push(c),
         }
     }
     out
@@ -453,6 +453,31 @@ mod tests {
         let html = view_page("/paste", "anything");
         assert!(html.contains("href=\"/paste\""));
         assert!(html.contains(">home<"));
+    }
+
+    #[test]
+    fn escape_attr_preserves_single_multibyte() {
+        assert_eq!(escape_attr("é"), "é");
+    }
+
+    #[test]
+    fn escape_attr_preserves_cjk() {
+        assert_eq!(escape_attr("日本"), "日本");
+    }
+
+    #[test]
+    fn escape_attr_preserves_emoji() {
+        assert_eq!(escape_attr("a🎉b"), "a🎉b");
+    }
+
+    #[test]
+    fn escape_attr_escapes_specials_adjacent_to_multibyte() {
+        assert_eq!(escape_attr("é&<"), "é&amp;&lt;");
+    }
+
+    #[test]
+    fn escape_attr_escapes_quote() {
+        assert_eq!(escape_attr("\""), "&quot;");
     }
 
     fn strip_tags_and_decode(s: &str) -> String {
