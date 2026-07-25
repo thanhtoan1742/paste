@@ -95,8 +95,9 @@ fn linkify(content: &str) -> String {
             ));
             i += end;
         } else {
-            push_escaped_char(&mut out, bytes[i]);
-            i += 1;
+            let ch = content[i..].chars().next().unwrap();
+            push_escaped_char(&mut out, ch);
+            i += ch.len_utf8();
         }
     }
     out
@@ -109,7 +110,7 @@ fn match_url(bytes: &[u8]) -> Option<usize> {
             let mut end = scheme.len();
             while end < bytes.len() {
                 let c = bytes[end];
-                if c.is_ascii_whitespace() || matches!(c, b'<' | b'>' | b'"' | b'\'') {
+                if !c.is_ascii() || c.is_ascii_whitespace() || matches!(c, b'<' | b'>' | b'"' | b'\'') {
                     break;
                 }
                 end += 1;
@@ -145,12 +146,12 @@ fn escape_attr(s: &str) -> String {
     out
 }
 
-fn push_escaped_char(out: &mut String, b: u8) {
-    match b {
-        b'&' => out.push_str("&amp;"),
-        b'<' => out.push_str("&lt;"),
-        b'>' => out.push_str("&gt;"),
-        _ => out.push(b as char),
+fn push_escaped_char(out: &mut String, c: char) {
+    match c {
+        '&' => out.push_str("&amp;"),
+        '<' => out.push_str("&lt;"),
+        '>' => out.push_str("&gt;"),
+        _ => out.push(c),
     }
 }
 
@@ -478,6 +479,35 @@ mod tests {
     #[test]
     fn escape_attr_escapes_quote() {
         assert_eq!(escape_attr("\""), "&quot;");
+    }
+
+    #[test]
+    fn linkify_preserves_multibyte_plain_text() {
+        assert_eq!(linkify("héllo"), "héllo");
+    }
+
+    #[test]
+    fn linkify_preserves_cjk_plain_text() {
+        assert_eq!(linkify("日本語"), "日本語");
+    }
+
+    #[test]
+    fn linkify_preserves_emoji_plain_text() {
+        assert_eq!(linkify("x🎉y"), "x🎉y");
+    }
+
+    #[test]
+    fn linkify_url_adjacent_to_multibyte() {
+        let out = linkify("éhttps://x.com");
+        assert!(out.contains("é"));
+        assert!(out.contains("<a href=\"https://x.com\""));
+    }
+
+    #[test]
+    fn linkify_multibyte_after_url() {
+        let out = linkify("https://x.comé");
+        assert!(out.contains("<a href=\"https://x.com\""));
+        assert!(out.contains("é"));
     }
 
     fn strip_tags_and_decode(s: &str) -> String {
