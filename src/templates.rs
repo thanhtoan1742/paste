@@ -534,6 +534,17 @@ mod tests {
         assert!(html.contains("<meta charset=\"utf-8\">"));
     }
 
+    #[test]
+    fn view_page_renders_multibyte_utf8() {
+        let html = view_page("", "héllo\n日本\n🎉");
+        assert!(html.contains("data-line=\"héllo\""));
+        assert!(html.contains("data-line=\"日本\""));
+        assert!(html.contains("data-line=\"🎉\""));
+        assert!(html.contains(">héllo<"));
+        assert!(html.contains(">日本<"));
+        assert!(html.contains(">🎉<"));
+    }
+
     fn strip_tags_and_decode(s: &str) -> String {
         let mut out = String::new();
         let mut in_tag = false;
