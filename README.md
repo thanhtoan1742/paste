@@ -9,6 +9,7 @@ Pastes are stored in memory and expire after a configurable TTL. No database, no
 - Short 4-character IDs with collision handling
 - Auto-expiring pastes with configurable TTL (presets or custom)
 - Copy-to-clipboard button on paste view
+- Full UTF-8 support (non-ASCII paste content renders correctly)
 - Admin dashboard at `/` with HTTP Basic Auth (uses the regular user credentials) showing all active pastes and a submit form
 - Optional lockdown mode requiring authentication for all routes
 - Dark mode via `prefers-color-scheme`
