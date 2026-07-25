@@ -3,7 +3,7 @@ const STYLE_STR: &str = include_str!("style.css");
 pub fn not_found_page() -> String {
     format!(
         r#"<!DOCTYPE html>
-<html><head><title>paste</title><style>{}</style></head>
+<html><head><meta charset="utf-8"><title>paste</title><style>{}</style></head>
 <body>
 <main>
 <p>paste not found or expired</p>
@@ -21,7 +21,7 @@ pub fn view_page(prefix: &str, content: &str) -> String {
     };
     format!(
         r#"<!DOCTYPE html>
-<html><head><title>paste</title><style>{}</style></head>
+<html><head><meta charset="utf-8"><title>paste</title><style>{}</style></head>
 <body>
 <main>
 <button class="copy" onclick="copyText([...document.querySelectorAll('.ln')].map(b=>b.dataset.line).join('\n'));flashAllCopied();this.textContent='copied!';setTimeout(()=>this.textContent='copy',1500)">copy</button>
@@ -163,7 +163,7 @@ pub fn admin_page(prefix: &str, count: usize, rows: &str) -> String {
     };
     format!(
         r#"<!DOCTYPE html>
-<html><head><title>paste</title><style>{}</style></head>
+<html><head><meta charset="utf-8"><title>paste</title><style>{}</style></head>
 <body>
 <main>
 <form method="POST" action="{}">
@@ -199,7 +199,7 @@ pub fn error_page(prefix: &str, message: &str) -> String {
     };
     format!(
         r#"<!DOCTYPE html>
-<html><head><title>paste</title><style>{}</style></head>
+<html><head><meta charset="utf-8"><title>paste</title><style>{}</style></head>
 <body>
 <main>
 <h1>error</h1>
@@ -508,6 +508,30 @@ mod tests {
         let out = linkify("https://x.comé");
         assert!(out.contains("<a href=\"https://x.com\""));
         assert!(out.contains("é"));
+    }
+
+    #[test]
+    fn not_found_page_declares_utf8_charset() {
+        let html = not_found_page();
+        assert!(html.contains("<meta charset=\"utf-8\">"));
+    }
+
+    #[test]
+    fn view_page_declares_utf8_charset() {
+        let html = view_page("", "anything");
+        assert!(html.contains("<meta charset=\"utf-8\">"));
+    }
+
+    #[test]
+    fn admin_page_declares_utf8_charset() {
+        let html = admin_page("", 0, "");
+        assert!(html.contains("<meta charset=\"utf-8\">"));
+    }
+
+    #[test]
+    fn error_page_declares_utf8_charset() {
+        let html = error_page("", "oops");
+        assert!(html.contains("<meta charset=\"utf-8\">"));
     }
 
     fn strip_tags_and_decode(s: &str) -> String {
