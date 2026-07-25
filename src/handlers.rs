@@ -696,6 +696,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn create_and_get_utf8_content() {
+        let state = test_state();
+        let app = build_app(state.clone());
+
+        let body = "content=h%C3%A9llo+%E6%97%A5%E6%9C%AC+%F0%9F%8E%89";
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/")
+                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .header(header::AUTHORIZATION, encode_basic_auth("user", "secret"))
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+        let loc = resp
+            .headers()
+            .get(header::LOCATION)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri(&loc)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 8192).await.unwrap();
+        let html = std::str::from_utf8(&body).unwrap();
+        assert!(html.contains("héllo"));
+        assert!(html.contains("日本"));
+        assert!(html.contains("🎉"));
+    }
+
+    #[tokio::test]
     async fn create_paste_rejects_ttl_exceeds_max() {
         let app = test_app();
         let resp = app

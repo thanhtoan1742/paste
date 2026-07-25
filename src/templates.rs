@@ -3,7 +3,7 @@ const STYLE_STR: &str = include_str!("style.css");
 pub fn not_found_page() -> String {
     format!(
         r#"<!DOCTYPE html>
-<html><head><title>paste</title><style>{}</style></head>
+<html><head><meta charset="utf-8"><title>paste</title><style>{}</style></head>
 <body>
 <main>
 <p>paste not found or expired</p>
@@ -21,7 +21,7 @@ pub fn view_page(prefix: &str, content: &str) -> String {
     };
     format!(
         r#"<!DOCTYPE html>
-<html><head><title>paste</title><style>{}</style></head>
+<html><head><meta charset="utf-8"><title>paste</title><style>{}</style></head>
 <body>
 <main>
 <button class="copy" onclick="copyText([...document.querySelectorAll('.ln')].map(b=>b.dataset.line).join('\n'));flashAllCopied();this.textContent='copied!';setTimeout(()=>this.textContent='copy',1500)">copy</button>
@@ -95,8 +95,9 @@ fn linkify(content: &str) -> String {
             ));
             i += end;
         } else {
-            push_escaped_char(&mut out, bytes[i]);
-            i += 1;
+            let ch = content[i..].chars().next().unwrap();
+            push_escaped_char(&mut out, ch);
+            i += ch.len_utf8();
         }
     }
     out
@@ -109,7 +110,7 @@ fn match_url(bytes: &[u8]) -> Option<usize> {
             let mut end = scheme.len();
             while end < bytes.len() {
                 let c = bytes[end];
-                if c.is_ascii_whitespace() || matches!(c, b'<' | b'>' | b'"' | b'\'') {
+                if !c.is_ascii() || c.is_ascii_whitespace() || matches!(c, b'<' | b'>' | b'"' | b'\'') {
                     break;
                 }
                 end += 1;
@@ -133,24 +134,24 @@ fn strip_trailing_punct(url: &str) -> &str {
 
 fn escape_attr(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
-    for b in s.bytes() {
-        match b {
-            b'&' => out.push_str("&amp;"),
-            b'<' => out.push_str("&lt;"),
-            b'>' => out.push_str("&gt;"),
-            b'"' => out.push_str("&quot;"),
-            _ => out.push(b as char),
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            _ => out.push(c),
         }
     }
     out
 }
 
-fn push_escaped_char(out: &mut String, b: u8) {
-    match b {
-        b'&' => out.push_str("&amp;"),
-        b'<' => out.push_str("&lt;"),
-        b'>' => out.push_str("&gt;"),
-        _ => out.push(b as char),
+fn push_escaped_char(out: &mut String, c: char) {
+    match c {
+        '&' => out.push_str("&amp;"),
+        '<' => out.push_str("&lt;"),
+        '>' => out.push_str("&gt;"),
+        _ => out.push(c),
     }
 }
 
@@ -162,7 +163,7 @@ pub fn admin_page(prefix: &str, count: usize, rows: &str) -> String {
     };
     format!(
         r#"<!DOCTYPE html>
-<html><head><title>paste</title><style>{}</style></head>
+<html><head><meta charset="utf-8"><title>paste</title><style>{}</style></head>
 <body>
 <main>
 <form method="POST" action="{}">
@@ -198,7 +199,7 @@ pub fn error_page(prefix: &str, message: &str) -> String {
     };
     format!(
         r#"<!DOCTYPE html>
-<html><head><title>paste</title><style>{}</style></head>
+<html><head><meta charset="utf-8"><title>paste</title><style>{}</style></head>
 <body>
 <main>
 <h1>error</h1>
@@ -453,6 +454,95 @@ mod tests {
         let html = view_page("/paste", "anything");
         assert!(html.contains("href=\"/paste\""));
         assert!(html.contains(">home<"));
+    }
+
+    #[test]
+    fn escape_attr_preserves_single_multibyte() {
+        assert_eq!(escape_attr("é"), "é");
+    }
+
+    #[test]
+    fn escape_attr_preserves_cjk() {
+        assert_eq!(escape_attr("日本"), "日本");
+    }
+
+    #[test]
+    fn escape_attr_preserves_emoji() {
+        assert_eq!(escape_attr("a🎉b"), "a🎉b");
+    }
+
+    #[test]
+    fn escape_attr_escapes_specials_adjacent_to_multibyte() {
+        assert_eq!(escape_attr("é&<"), "é&amp;&lt;");
+    }
+
+    #[test]
+    fn escape_attr_escapes_quote() {
+        assert_eq!(escape_attr("\""), "&quot;");
+    }
+
+    #[test]
+    fn linkify_preserves_multibyte_plain_text() {
+        assert_eq!(linkify("héllo"), "héllo");
+    }
+
+    #[test]
+    fn linkify_preserves_cjk_plain_text() {
+        assert_eq!(linkify("日本語"), "日本語");
+    }
+
+    #[test]
+    fn linkify_preserves_emoji_plain_text() {
+        assert_eq!(linkify("x🎉y"), "x🎉y");
+    }
+
+    #[test]
+    fn linkify_url_adjacent_to_multibyte() {
+        let out = linkify("éhttps://x.com");
+        assert!(out.contains("é"));
+        assert!(out.contains("<a href=\"https://x.com\""));
+    }
+
+    #[test]
+    fn linkify_multibyte_after_url() {
+        let out = linkify("https://x.comé");
+        assert!(out.contains("<a href=\"https://x.com\""));
+        assert!(out.contains("é"));
+    }
+
+    #[test]
+    fn not_found_page_declares_utf8_charset() {
+        let html = not_found_page();
+        assert!(html.contains("<meta charset=\"utf-8\">"));
+    }
+
+    #[test]
+    fn view_page_declares_utf8_charset() {
+        let html = view_page("", "anything");
+        assert!(html.contains("<meta charset=\"utf-8\">"));
+    }
+
+    #[test]
+    fn admin_page_declares_utf8_charset() {
+        let html = admin_page("", 0, "");
+        assert!(html.contains("<meta charset=\"utf-8\">"));
+    }
+
+    #[test]
+    fn error_page_declares_utf8_charset() {
+        let html = error_page("", "oops");
+        assert!(html.contains("<meta charset=\"utf-8\">"));
+    }
+
+    #[test]
+    fn view_page_renders_multibyte_utf8() {
+        let html = view_page("", "héllo\n日本\n🎉");
+        assert!(html.contains("data-line=\"héllo\""));
+        assert!(html.contains("data-line=\"日本\""));
+        assert!(html.contains("data-line=\"🎉\""));
+        assert!(html.contains(">héllo<"));
+        assert!(html.contains(">日本<"));
+        assert!(html.contains(">🎉<"));
     }
 
     fn strip_tags_and_decode(s: &str) -> String {
