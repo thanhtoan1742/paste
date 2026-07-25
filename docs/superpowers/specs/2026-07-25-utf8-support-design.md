@@ -13,12 +13,12 @@ Non-ASCII paste content renders correctly in the paste view, and all HTML templa
 - No new crates (the project stays dependency-free beyond its existing set).
 - No changes to paste storage (`String` is already valid UTF-8).
 - No changes to form parsing (Axum/`serde_urlencoded` already decode UTF-8 correctly).
-- No changes to the URL-linkify detection scheme (`match_url` matches ASCII `http://`/`https://` only, which is correct).
+- No changes to the URL-linkify scheme *detection* (`match_url` keeps matching ASCII `http://`/`https://` only). (Note: during implementation, `match_url`'s *scan loop* was found to absorb trailing non-ASCII bytes into the URL — see "Implementation deviation" below — and was fixed.)
 - No internationalization of the UI text itself (button labels, headings stay English).
 
 ## Approach
 
-Change is localized to `src/templates.rs`. Switch the two corrupting helpers from byte iteration to char iteration, and add a `<meta charset="utf-8">` declaration to each of the four HTML page templates. No other files change.
+Change is localized to `src/templates.rs`. Switch the two corrupting helpers from byte iteration to char iteration, and add a `<meta charset="utf-8">` declaration to each of the four HTML page templates. (Implementation also fixed `match_url`'s scan loop and added tests in `src/handlers.rs` and a README bullet — see "Implementation Deviation" and "Files Touched".)
 
 ### Audit Summary
 
@@ -30,7 +30,7 @@ A full audit of every string-handling path in the codebase:
 | `templates::push_escaped_char` | **Bug** | Takes `u8`, pushes `b as char` → same corruption. |
 | `templates::linkify` | **Bug** | Byte-by-byte loop calls `push_escaped_char` per byte → corrupts non-ASCII. |
 | `templates::html_escape` | Safe | Uses `str::replace`, operates on `str`. |
-| `templates::match_url` | Safe | ASCII-only scheme detection; `i` always lands on char boundaries. |
+| `templates::match_url` | Fixed (was: Safe-ish) | Scheme detection is ASCII-only and correct, but the scan loop absorbed trailing non-ASCII bytes into the URL. Fixed during implementation (see below). |
 | `templates::strip_trailing_punct` | Safe | Matches ASCII punctuation only. |
 | `handlers::render_admin` preview | Safe | Uses `.chars().take(100)`. |
 | `auth::check_basic_auth` | Safe | Uses `std::str::from_utf8`. |
@@ -110,5 +110,14 @@ The existing template and handler tests must continue to pass. The byte→char s
 ## Files Touched
 
 - `src/templates.rs` — rewrite `escape_attr`, `push_escaped_char`, `linkify` non-URL branch; add `<meta charset="utf-8">` to all four page functions; add unit tests.
+- `src/handlers.rs` — add end-to-end UTF-8 round-trip test (test-only).
+- `README.md` — document UTF-8 support in the features list.
+- `src/templates.rs` `match_url` — see "Implementation deviation" below.
 
-No other files change.
+## Implementation Deviation
+
+During implementation (Task 2), the audit's "Safe" label for `match_url` proved inaccurate for its *scan loop* (not its scheme detection). The original `match_url` advanced `end` until it hit ASCII whitespace or `< > " '`, but did not break on non-ASCII bytes — so a URL adjacent to multi-byte text (e.g. `https://x.comé`) absorbed the `é` into the URL (`<a href="https://x.comé">`), contradicting this spec's design note that "`match_url` only advances `i` past ASCII bytes."
+
+Fix (authorized scope expansion): added `!c.is_ascii()` as a URL terminator in `match_url`'s scan loop. The URL now ends at `.com` and the `é` is emitted by the (fixed) non-URL branch. ASCII URL behavior is unchanged (all existing `linkify_*` tests pass). The char-boundary invariant is preserved: non-ASCII break points are lead bytes (char boundaries), and ASCII terminators are 1-byte chars.
+
+The scheme *detection* (matching `http://`/`https://`) was always ASCII-only and remains unchanged.
