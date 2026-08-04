@@ -1,4 +1,5 @@
 mod auth;
+mod base64;
 mod config;
 mod handlers;
 mod state;

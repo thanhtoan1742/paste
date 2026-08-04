@@ -157,3 +157,17 @@ a.home:hover {
   word-wrap: break-word;
   padding: 0 0.25rem;
 }
+.image-container {
+  text-align: center;
+  margin: 1rem 0;
+}
+.paste-image {
+  max-width: 100%;
+  max-height: 80vh;
+  border-radius: 5px;
+}
+.image-info {
+  text-align: center;
+  color: var(--text-light);
+  font-size: 0.85rem;
+}

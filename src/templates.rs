@@ -155,6 +155,53 @@ fn push_escaped_char(out: &mut String, c: char) {
     }
 }
 
+pub fn view_image_page(prefix: &str, mime_type: &str, filename: &str, size_bytes: usize, b64_data: &str) -> String {
+    let home = if prefix.is_empty() {
+        "/".to_string()
+    } else {
+        prefix.to_string()
+    };
+    let size_human = format_size(size_bytes);
+    let data_uri = format!("data:{};base64,{}", mime_type, b64_data);
+    format!(
+        r#"<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>paste</title><style>{style}</style></head>
+<body>
+<main>
+<button class="copy" onclick="copyImage('{data_uri_esc}');this.textContent='copied!';setTimeout(()=>this.textContent='copy',1500)">copy</button>
+<a class="home" href="{home}">home</a>
+<div class="image-container"><img src="{data_uri}" alt="{esc_filename}" class="paste-image"></div>
+<p class="image-info">{esc_filename} &mdash; {size_human}</p>
+<script>
+async function copyImage(uri){{
+ try{{
+  const r=await fetch(uri);
+  const b=await r.blob();
+  await navigator.clipboard.write([new ClipboardItem({{[b.type]:b}})]);
+ }}catch(e){{window.open(uri,'_blank');}}
+}}
+</script>
+</main>
+</body></html>"#,
+        style = STYLE_STR,
+        data_uri_esc = html_escape(&data_uri),
+        data_uri = data_uri,
+        home = home,
+        esc_filename = html_escape(filename),
+        size_human = size_human,
+    )
+}
+
+pub fn format_size(bytes: usize) -> String {
+    if bytes < 1024 {
+        format!("{} B", bytes)
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+    }
+}
+
 pub fn admin_page(prefix: &str, count: usize, rows: &str) -> String {
     let action = if prefix.is_empty() {
         "/".to_string()
@@ -582,5 +629,34 @@ mod tests {
             }
         }
         out
+    }
+
+    #[test]
+    fn view_image_page_contains_img() {
+        let html = view_image_page("", "image/png", "s.png", 1024, "abc");
+        assert!(html.contains("<img src=\"data:image/png;base64,abc\""));
+        assert!(html.contains("s.png"));
+        assert!(html.contains("1.0 KB"));
+    }
+
+    #[test]
+    fn view_image_page_escapes_filename() {
+        let html = view_image_page("", "image/png", "<x>.png", 500, "a");
+        assert!(html.contains("&lt;x&gt;.png"));
+    }
+
+    #[test]
+    fn view_image_page_home_link_prefix() {
+        let html = view_image_page("/paste", "image/png", "x.png", 100, "abc");
+        assert!(html.contains("href=\"/paste\""));
+    }
+
+    #[test]
+    fn format_size_values() {
+        assert_eq!(format_size(0), "0 B");
+        assert_eq!(format_size(500), "500 B");
+        assert_eq!(format_size(1536), "1.5 KB");
+        assert_eq!(format_size(1048576), "1.0 MB");
+        assert_eq!(format_size(20971520), "20.0 MB");
     }
 }

@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use crate::auth::{check_basic_auth, unauthorized_response};
-use crate::state::AppState;
+use crate::state::{AppState, PasteContent};
 use crate::templates;
 
 pub const SWEEPER_INTERVAL_SECS: u64 = 60;
@@ -154,7 +154,7 @@ async fn create_paste(
     };
 
     let entry = crate::state::PasteEntry {
-        content: form.content,
+        content: PasteContent::Text(form.content),
         expires_at: Instant::now() + std::time::Duration::from_secs(ttl_secs),
     };
 
@@ -186,7 +186,11 @@ async fn get_paste(
             .into_response();
     }
 
-    axum::response::Html(templates::view_page(&state.config.prefix, &entry.content))
+    let text = match &entry.content {
+        PasteContent::Text(t) => t.as_str(),
+        PasteContent::Image { .. } => "",
+    };
+    axum::response::Html(templates::view_page(&state.config.prefix, text))
         .into_response()
 }
 
@@ -235,7 +239,11 @@ async fn render_admin(state: &Arc<AppState>) -> axum::response::Response {
     let prefix = &state.config.prefix;
     for (id, entry) in pastes.iter() {
         let escaped_id = templates::html_escape(id);
-        let preview = templates::html_escape(&entry.content.chars().take(100).collect::<String>());
+        let content_preview = match &entry.content {
+            PasteContent::Text(t) => t.chars().take(100).collect::<String>(),
+            PasteContent::Image { .. } => String::from("[image]"),
+        };
+        let preview = templates::html_escape(&content_preview);
         let secs_left = entry.expires_at.duration_since(now).as_secs();
         let human = format_duration(secs_left);
         rows.push_str(&format!(
@@ -349,7 +357,7 @@ mod tests {
         state.pastes.write().await.insert(
             "dash01".to_string(),
             PasteEntry {
-                content: "dash content".to_string(),
+                content: PasteContent::Text("dash content".to_string()),
                 expires_at: Instant::now() + std::time::Duration::from_secs(3600),
             },
         );
@@ -425,7 +433,7 @@ mod tests {
             state.pastes.write().await.insert(
                 format!("id{}", i),
                 PasteEntry {
-                    content: "x".to_string(),
+                    content: PasteContent::Text("x".to_string()),
                     expires_at: Instant::now() + std::time::Duration::from_secs(3600),
                 },
             );
@@ -451,7 +459,7 @@ mod tests {
         state.pastes.write().await.insert(
             "testid1".to_string(),
             PasteEntry {
-                content: "hello world".to_string(),
+                content: PasteContent::Text("hello world".to_string()),
                 expires_at: Instant::now() + std::time::Duration::from_secs(3600),
             },
         );
@@ -495,7 +503,7 @@ mod tests {
         state.pastes.write().await.insert(
             "expired1".to_string(),
             PasteEntry {
-                content: "old".to_string(),
+                content: PasteContent::Text("old".to_string()),
                 expires_at: Instant::now() - std::time::Duration::from_secs(1),
             },
         );
@@ -556,7 +564,7 @@ mod tests {
         state.pastes.write().await.insert(
             "abc12345".to_string(),
             PasteEntry {
-                content: "test content".to_string(),
+                content: PasteContent::Text("test content".to_string()),
                 expires_at: Instant::now() + std::time::Duration::from_secs(3600),
             },
         );
@@ -593,7 +601,7 @@ mod tests {
         state.pastes.write().await.insert(
             "del1".to_string(),
             PasteEntry {
-                content: "to be deleted".to_string(),
+                content: PasteContent::Text("to be deleted".to_string()),
                 expires_at: Instant::now() + std::time::Duration::from_secs(3600),
             },
         );
@@ -623,7 +631,7 @@ mod tests {
         state.pastes.write().await.insert(
             "del2".to_string(),
             PasteEntry {
-                content: "still here".to_string(),
+                content: PasteContent::Text("still here".to_string()),
                 expires_at: Instant::now() + std::time::Duration::from_secs(3600),
             },
         );
@@ -786,7 +794,7 @@ mod tests {
         state.pastes.write().await.insert(
             "ab01".to_string(),
             PasteEntry {
-                content: "prefixed content".to_string(),
+                content: PasteContent::Text("prefixed content".to_string()),
                 expires_at: Instant::now() + std::time::Duration::from_secs(3600),
             },
         );
