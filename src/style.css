@@ -171,3 +171,60 @@ a.home:hover {
   color: var(--text-light);
   font-size: 0.85rem;
 }
+.drop-zone {
+  border: 2px dashed var(--border);
+  border-radius: 8px;
+  padding: 2rem;
+  text-align: center;
+  margin-bottom: 1rem;
+  cursor: pointer;
+  transition: border-color 0.2s;
+}
+.drop-zone:hover, .drop-zone.drag-over {
+  border-color: var(--accent);
+}
+.drop-zone-inner p {
+  margin: 0.25rem 0;
+}
+.drop-icon {
+  font-size: 2.5rem;
+  font-weight: bold;
+  color: var(--text-light);
+  line-height: 1;
+}
+.drop-sub {
+  color: var(--text-light);
+  font-size: 0.85rem;
+}
+.drop-formats {
+  color: var(--text-light);
+  font-size: 0.8rem;
+  margin-top: 0.5rem !important;
+}
+.image-preview {
+  max-width: 100%;
+  max-height: 200px;
+  border-radius: 5px;
+  margin: 0 auto;
+  display: block;
+}
+#clear-image {
+  margin-top: 0.5rem;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 0.25em 1em;
+  cursor: pointer;
+  color: var(--text);
+  font-family: var(--sans-font);
+  font-size: 0.85rem;
+}
+#clear-image:hover {
+  background-color: var(--accent-bg);
+}
+.divider {
+  text-align: center;
+  color: var(--text-light);
+  font-size: 0.85rem;
+  margin: 1rem 0 0.5rem;
+}
