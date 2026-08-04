@@ -14,6 +14,8 @@ pub struct Config {
     pub max_size: usize,
     #[serde(default = "default_max_pastes")]
     pub max_pastes: usize,
+    #[serde(default = "default_max_image_size")]
+    pub max_image_size: usize,
     #[serde(default = "default_lockdown")]
     pub lockdown: bool,
     #[serde(default = "default_user")]
@@ -31,6 +33,7 @@ impl Default for Config {
             default_ttl_mins: default_default_ttl_mins(),
             max_size: default_max_size(),
             max_pastes: default_max_pastes(),
+            max_image_size: default_max_image_size(),
             lockdown: default_lockdown(),
             user: default_user(),
             password: default_password(),
@@ -55,6 +58,9 @@ fn default_max_size() -> usize {
 }
 fn default_max_pastes() -> usize {
     512
+}
+fn default_max_image_size() -> usize {
+    20_971_520
 }
 fn default_lockdown() -> bool {
     false
@@ -145,6 +151,7 @@ password = "pass123"
         assert_eq!(config.default_ttl_mins, 15);
         assert_eq!(config.max_size, 8_388_608);
         assert_eq!(config.max_pastes, 512);
+        assert_eq!(config.max_image_size, 20_971_520);
         assert_eq!(config.user, "user");
         assert_eq!(config.password, "pass");
     }
