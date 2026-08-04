@@ -101,7 +101,7 @@ fn find_crlf(body: &[u8], start: usize) -> Result<usize, String> {
 fn skip_line(body: &[u8], pos: usize) -> usize {
     if pos + 2 <= body.len() && body[pos] == b'\r' && body[pos + 1] == b'\n' {
         pos + 2
-    } else if pos + 1 <= body.len() && body[pos] == b'\n' {
+    } else if pos < body.len() && body[pos] == b'\n' {
         pos + 1
     } else {
         pos
