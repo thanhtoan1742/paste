@@ -155,6 +155,53 @@ fn push_escaped_char(out: &mut String, c: char) {
     }
 }
 
+pub fn view_image_page(prefix: &str, mime_type: &str, filename: &str, size_bytes: usize, b64_data: &str) -> String {
+    let home = if prefix.is_empty() {
+        "/".to_string()
+    } else {
+        prefix.to_string()
+    };
+    let size_human = format_size(size_bytes);
+    let data_uri = format!("data:{};base64,{}", mime_type, b64_data);
+    format!(
+        r#"<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>paste</title><style>{style}</style></head>
+<body>
+<main>
+<button class="copy" onclick="copyImage('{data_uri_esc}');this.textContent='copied!';setTimeout(()=>this.textContent='copy',1500)">copy</button>
+<a class="home" href="{home}">home</a>
+<div class="image-container"><img src="{data_uri}" alt="{esc_filename}" class="paste-image"></div>
+<p class="image-info">{esc_filename} &mdash; {size_human}</p>
+<script>
+async function copyImage(uri){{
+ try{{
+  const r=await fetch(uri);
+  const b=await r.blob();
+  await navigator.clipboard.write([new ClipboardItem({{[b.type]:b}})]);
+ }}catch(e){{window.open(uri,'_blank');}}
+}}
+</script>
+</main>
+</body></html>"#,
+        style = STYLE_STR,
+        data_uri_esc = html_escape(&data_uri),
+        data_uri = data_uri,
+        home = home,
+        esc_filename = html_escape(filename),
+        size_human = size_human,
+    )
+}
+
+pub fn format_size(bytes: usize) -> String {
+    if bytes < 1024 {
+        format!("{} B", bytes)
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+    }
+}
+
 pub fn admin_page(prefix: &str, count: usize, rows: &str) -> String {
     let action = if prefix.is_empty() {
         "/".to_string()
@@ -163,11 +210,23 @@ pub fn admin_page(prefix: &str, count: usize, rows: &str) -> String {
     };
     format!(
         r#"<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>paste</title><style>{}</style></head>
+<html><head><meta charset="utf-8"><title>paste</title><style>{style}</style></head>
 <body>
 <main>
-<form method="POST" action="{}">
-<textarea name="content" rows="20" autofocus></textarea>
+<form method="POST" action="{action}" enctype="multipart/form-data" id="paste-form">
+<div class="drop-zone" id="drop-zone">
+  <input type="file" id="image-input" name="image" accept="image/png,image/jpeg,image/gif,image/webp,image/svg+xml" style="display:none">
+  <div class="drop-zone-inner" id="drop-zone-inner">
+    <div class="drop-icon">&plus;</div>
+    <p>Drop an image here, or click to browse</p>
+    <p class="drop-sub">or paste from clipboard (Ctrl&plus;V)</p>
+    <p class="drop-formats">PNG, JPEG, GIF, WebP, SVG &mdash; max 20 MB</p>
+  </div>
+  <img id="image-preview" class="image-preview" style="display:none" alt="">
+  <button type="button" id="clear-image" style="display:none">clear image</button>
+</div>
+<div class="divider">or paste text below</div>
+<textarea name="content" id="content-area" rows="20" autofocus></textarea>
 <select name="ttl">
 <option value="5">5 minutes</option>
 <option value="15" selected>15 minutes</option>
@@ -180,14 +239,47 @@ pub fn admin_page(prefix: &str, count: usize, rows: &str) -> String {
 <input name="ttl_custom" type="number" min="1" placeholder="or custom (minutes)">
 <input type="submit" value="paste">
 </form>
-<h1>{} pastes</h1>
+<h1>{count} pastes</h1>
 <table>
-<tr><th>id</th><th>expires in</th><th>preview</th><th>actions</th></tr>
-{}
+<tr><th>id</th><th>type</th><th>expires in</th><th>preview</th><th>actions</th></tr>
+{rows}
 </table>
+<script>
+const dz=document.getElementById('drop-zone');
+const di=document.getElementById('drop-zone-inner');
+const inp=document.getElementById('image-input');
+const prev=document.getElementById('image-preview');
+const clr=document.getElementById('clear-image');
+const txt=document.getElementById('content-area');
+let hasImg=false;
+dz.addEventListener('click',()=>inp.click());
+dz.addEventListener('dragover',e=>{{e.preventDefault();dz.classList.add('drag-over');}});
+dz.addEventListener('dragleave',()=>dz.classList.remove('drag-over'));
+dz.addEventListener('drop',e=>{{
+  e.preventDefault();dz.classList.remove('drag-over');
+  const f=e.dataTransfer.files[0];
+  if(f&&f.type.startsWith('image/'))setImg(f);
+}});
+inp.addEventListener('change',()=>{{const f=inp.files[0];if(f)setImg(f);}});
+document.addEventListener('paste',e=>{{
+  for(const it of e.clipboardData?.items||[]){{ 
+    if(it.type.startsWith('image/')){{e.preventDefault();setImg(it.getAsFile());return;}}
+  }}
+}});
+function setImg(f){{
+  hasImg=true;txt.value='';txt.disabled=true;
+  di.style.display='none';prev.src=URL.createObjectURL(f);
+  prev.style.display='block';clr.style.display='inline-block';
+}}
+clr.addEventListener('click',()=>{{
+  hasImg=false;inp.value='';prev.src='';prev.style.display='none';
+  clr.style.display='none';di.style.display='';txt.disabled=false;
+}});
+txt.addEventListener('input',()=>{{if(txt.value&&hasImg)clr.click();}});
+</script>
 </main>
 </body></html>"#,
-        STYLE_STR, action, count, rows
+        style = STYLE_STR, action = action, count = count, rows = rows,
     )
 }
 
@@ -242,6 +334,9 @@ mod tests {
     fn admin_page_form_action_root() {
         let html = admin_page("", 0, "");
         assert!(html.contains("action=\"/\""));
+        assert!(html.contains("<th>type</th>"));
+        assert!(html.contains("drop-zone"));
+        assert!(html.contains("multipart/form-data"));
     }
 
     #[test]
@@ -582,5 +677,34 @@ mod tests {
             }
         }
         out
+    }
+
+    #[test]
+    fn view_image_page_contains_img() {
+        let html = view_image_page("", "image/png", "s.png", 1024, "abc");
+        assert!(html.contains("<img src=\"data:image/png;base64,abc\""));
+        assert!(html.contains("s.png"));
+        assert!(html.contains("1.0 KB"));
+    }
+
+    #[test]
+    fn view_image_page_escapes_filename() {
+        let html = view_image_page("", "image/png", "<x>.png", 500, "a");
+        assert!(html.contains("&lt;x&gt;.png"));
+    }
+
+    #[test]
+    fn view_image_page_home_link_prefix() {
+        let html = view_image_page("/paste", "image/png", "x.png", 100, "abc");
+        assert!(html.contains("href=\"/paste\""));
+    }
+
+    #[test]
+    fn format_size_values() {
+        assert_eq!(format_size(0), "0 B");
+        assert_eq!(format_size(500), "500 B");
+        assert_eq!(format_size(1536), "1.5 KB");
+        assert_eq!(format_size(1048576), "1.0 MB");
+        assert_eq!(format_size(20971520), "20.0 MB");
     }
 }
