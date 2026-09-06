@@ -81,8 +81,8 @@ pub fn load(path: &str) -> Result<Config, String> {
 
     normalize_prefix(&mut config);
 
-    if config.user == "user" && config.password == "pass" {
-        warn!("using default credentials (user:pass); set user and password in paste.toml");
+    if config.lockdown && config.user == "user" && config.password == "pass" {
+        warn!("lockdown enabled but using default credentials (user:pass); set user and password in paste.toml");
     }
 
     Ok(config)
