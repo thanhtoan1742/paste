@@ -8,6 +8,20 @@ mod templates;
 
 use std::future::IntoFuture;
 use std::time::Instant;
+use tracing::{error, info, warn};
+
+fn init_logging() {
+    use tracing_subscriber::EnvFilter;
+
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("info"));
+
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_target(false)
+        .with_timer(tracing_subscriber::fmt::time::SystemTime)
+        .init();
+}
 
 fn parse_config_path() -> String {
     let args: Vec<String> = std::env::args().collect();
@@ -44,23 +58,35 @@ async fn shutdown_signal(shutdown_tx: tokio::sync::oneshot::Sender<()>) {
         _ = terminate => {}
     }
 
-    println!("shutdown signal received, draining connections...");
+    warn!("shutdown signal received, draining connections...");
     let _ = shutdown_tx.send(());
 }
 
 #[tokio::main]
 async fn main() {
+    init_logging();
+
     let path = parse_config_path();
+    info!(config_path = %path, "loading config");
     let config = match config::load(&path) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("error: {e}");
+            error!(config_path = %path, error = %e, "failed to load config");
             std::process::exit(1);
         }
     };
 
     let state = state::new_app_state(config);
     let bind = state.config.bind.clone();
+    info!(
+        bind = %bind,
+        max_pastes = state.config.max_pastes,
+        max_size = state.config.max_size,
+        max_ttl_secs = state.config.max_ttl_secs,
+        lockdown = state.config.lockdown,
+        prefix = %state.config.prefix,
+        "starting paste server"
+    );
 
     let sweeper = tokio::spawn({
         let state = state.clone();
@@ -70,11 +96,13 @@ async fn main() {
             ));
             loop {
                 interval.tick().await;
-                state
-                    .pastes
-                    .write()
-                    .await
-                    .retain(|_, entry| Instant::now() < entry.expires_at);
+                let mut pastes = state.pastes.write().await;
+                let before = pastes.len();
+                pastes.retain(|_, entry| Instant::now() < entry.expires_at);
+                let removed = before - pastes.len();
+                if removed > 0 {
+                    info!(removed = removed, remaining = pastes.len(), "sweeper removed expired pastes");
+                }
             }
         }
     });
@@ -84,12 +112,12 @@ async fn main() {
     let listener = match tokio::net::TcpListener::bind(&bind).await {
         Ok(l) => l,
         Err(e) => {
-            eprintln!("error binding to {bind}: {e}");
+            error!(bind = %bind, error = %e, "failed to bind listener");
             sweeper.abort();
             std::process::exit(1);
         }
     };
-    println!("listening on {}", bind);
+    info!(bind = %bind, "listening");
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
     let server = axum::serve(listener, app)
@@ -105,8 +133,8 @@ async fn main() {
         }
         res = &mut server => {
             match res {
-                Ok(()) => eprintln!("server exited before any signal"),
-                Err(e) => eprintln!("server error: {e}"),
+                Ok(()) => error!("server exited before any signal"),
+                Err(e) => error!(error = %e, "server error"),
             }
             sweeper.abort();
             std::process::exit(1);
@@ -117,13 +145,13 @@ async fn main() {
 
     // Phase 2: cap the drain at 10 seconds.
     match tokio::time::timeout(std::time::Duration::from_secs(10), &mut server).await {
-        Ok(Ok(())) => println!("shutdown complete"),
+        Ok(Ok(())) => info!("shutdown complete"),
         Ok(Err(e)) => {
-            eprintln!("server error during shutdown: {e}");
+            error!(error = %e, "server error during shutdown");
             std::process::exit(1);
         }
         Err(_) => {
-            println!("shutdown timed out after 10s, forcing exit");
+            warn!("shutdown timed out after 10s, forcing exit");
             std::process::exit(1);
         }
     }

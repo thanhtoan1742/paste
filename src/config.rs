@@ -1,4 +1,5 @@
 use serde::Deserialize;
+use tracing::warn;
 
 #[derive(Deserialize, Clone)]
 pub struct Config {
@@ -81,7 +82,7 @@ pub fn load(path: &str) -> Result<Config, String> {
     normalize_prefix(&mut config);
 
     if config.user == "user" && config.password == "pass" {
-        eprintln!("warning: using default credentials (user:pass); set user and password in paste.toml");
+        warn!("using default credentials (user:pass); set user and password in paste.toml");
     }
 
     Ok(config)

@@ -10,6 +10,7 @@ use axum::{
 use serde::Deserialize;
 use std::sync::Arc;
 use std::time::Instant;
+use tracing::{debug, info, warn};
 
 use crate::auth::{check_basic_auth, unauthorized_response};
 use crate::config::Config;
@@ -72,6 +73,23 @@ fn format_duration(secs: u64) -> String {
     parts.join(" ")
 }
 
+async fn request_logger(req: Request<Body>, next: Next) -> Response {
+    let method = req.method().clone();
+    let path = req.uri().path().to_string();
+    let started = Instant::now();
+    let response = next.run(req).await;
+    let status = response.status();
+    let duration = started.elapsed();
+    info!(
+        method = %method,
+        path = %path,
+        status = %status.as_u16(),
+        duration_ms = duration.as_millis(),
+        "request"
+    );
+    response
+}
+
 async fn lockdown_auth(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -88,6 +106,7 @@ async fn lockdown_auth(
     if check_basic_auth(auth, &state.config.user, &state.config.password) {
         next.run(req).await
     } else {
+        warn!(path = %req.uri().path(), "lockdown rejected unauthenticated request");
         unauthorized_response().into_response()
     }
 }
@@ -131,6 +150,7 @@ async fn create_paste(
         .unwrap_or("");
 
     if !check_basic_auth(auth, &state.config.user, &state.config.password) {
+        warn!("create paste rejected: invalid credentials");
         return unauthorized_response().into_response();
     }
 
@@ -142,10 +162,14 @@ async fn create_paste(
     let max_body = state.config.max_size.max(state.config.max_image_size) + 4096;
     let bytes = match axum::body::to_bytes(body, max_body).await {
         Ok(b) => b,
-        Err(_) => return StatusCode::PAYLOAD_TOO_LARGE.into_response(),
+        Err(_) => {
+            warn!(max_body = max_body, "create paste rejected: body too large");
+            return StatusCode::PAYLOAD_TOO_LARGE.into_response();
+        }
     };
 
     if bytes.len() > max_body {
+        warn!(len = bytes.len(), max_body = max_body, "create paste rejected: body too large");
         return StatusCode::PAYLOAD_TOO_LARGE.into_response();
     }
 
@@ -258,6 +282,7 @@ async fn handle_multipart_create(
         let prefix = state.config.prefix.clone();
         let mut pastes = state.pastes.write().await;
         if pastes.len() >= state.config.max_pastes {
+            warn!("create paste rejected: max_pastes reached");
             return StatusCode::INSUFFICIENT_STORAGE.into_response();
         }
 
@@ -272,12 +297,23 @@ async fn handle_multipart_create(
             id.clone(),
             crate::state::PasteEntry {
                 content: PasteContent::Image {
-                    data,
-                    mime_type: mime,
-                    filename,
+                    data: data.clone(),
+                    mime_type: mime.clone(),
+                    filename: filename.clone(),
                 },
                 expires_at: Instant::now() + std::time::Duration::from_secs(ttl_secs),
             },
+        );
+
+        info!(
+            id = %id,
+            kind = "image",
+            bytes = data.len(),
+            mime = %mime,
+            filename = %filename,
+            ttl_secs = ttl_secs,
+            total_pastes = pastes.len(),
+            "paste created"
         );
 
         return axum::response::Redirect::to(&format!("{}/{}", prefix, id)).into_response();
@@ -316,12 +352,22 @@ async fn handle_multipart_create(
         }
     };
 
+    let content_len = content.len();
     pastes.insert(
         id.clone(),
         crate::state::PasteEntry {
             content: PasteContent::Text(content),
             expires_at: Instant::now() + std::time::Duration::from_secs(ttl_secs),
         },
+    );
+
+    info!(
+        id = %id,
+        kind = "text",
+        bytes = content_len,
+        ttl_secs = ttl_secs,
+        total_pastes = pastes.len(),
+        "paste created (multipart)"
     );
 
     axum::response::Redirect::to(&format!("{}/{}", prefix, id)).into_response()
@@ -399,6 +445,7 @@ async fn handle_form_create(state: Arc<AppState>, body: &[u8]) -> Response {
     };
 
     if form.content.len() > state.config.max_size {
+        warn!(bytes = form.content.len(), max_size = state.config.max_size, "create paste rejected: text too large");
         return StatusCode::PAYLOAD_TOO_LARGE.into_response();
     }
 
@@ -433,6 +480,7 @@ async fn handle_form_create(state: Arc<AppState>, body: &[u8]) -> Response {
     let mut pastes = state.pastes.write().await;
 
     if pastes.len() >= state.config.max_pastes {
+        warn!("create paste rejected: max_pastes reached");
         return StatusCode::INSUFFICIENT_STORAGE.into_response();
     }
 
@@ -443,12 +491,22 @@ async fn handle_form_create(state: Arc<AppState>, body: &[u8]) -> Response {
         }
     };
 
+    let content_len = form.content.len();
     pastes.insert(
         id.clone(),
         crate::state::PasteEntry {
             content: PasteContent::Text(form.content),
             expires_at: Instant::now() + std::time::Duration::from_secs(ttl_secs),
         },
+    );
+
+    info!(
+        id = %id,
+        kind = "text",
+        bytes = content_len,
+        ttl_secs = ttl_secs,
+        total_pastes = pastes.len(),
+        "paste created"
     );
 
     axum::response::Redirect::to(&format!("{}/{}", prefix, id)).into_response()
@@ -460,6 +518,7 @@ async fn get_paste(
 ) -> impl IntoResponse {
     let pastes = state.pastes.read().await;
     let Some(entry) = pastes.get(&id) else {
+        debug!(paste_id = %id, "paste not found");
         return (
             StatusCode::NOT_FOUND,
             axum::response::Html(templates::not_found_page()),
@@ -470,6 +529,7 @@ async fn get_paste(
     if Instant::now() > entry.expires_at {
         drop(pastes);
         state.pastes.write().await.remove(&id);
+        info!(paste_id = %id, "paste expired and removed");
         return (
             StatusCode::GONE,
             axum::response::Html(templates::not_found_page()),
@@ -524,10 +584,12 @@ async fn delete_paste(
         .unwrap_or("");
 
     if !check_basic_auth(auth, &state.config.user, &state.config.password) {
+        warn!(paste_id = %id, "delete rejected: invalid credentials");
         return unauthorized_response().into_response();
     }
 
     state.pastes.write().await.remove(&id);
+    info!(paste_id = %id, "paste deleted");
 
     let home_path = if state.config.prefix.is_empty() {
         "/".to_string()
@@ -591,6 +653,7 @@ pub fn build_app(state: Arc<AppState>) -> Router {
             state_for_lockdown,
             lockdown_auth,
         ))
+        .layer(middleware::from_fn(request_logger))
         .layer(middleware::from_fn(security_headers));
 
     let router = if prefix.is_empty() {

@@ -14,7 +14,7 @@ pub fn base64_decode(input: &str) -> Result<Vec<u8>, ()> {
         .bytes()
         .filter(|&b| b != b'\n' && b != b'\r')
         .collect();
-    if bytes.len() % 4 != 0 {
+    if !bytes.len().is_multiple_of(4) {
         return Err(());
     }
 
