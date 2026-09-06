@@ -23,6 +23,10 @@ pub struct Config {
     pub user: String,
     #[serde(default = "default_password")]
     pub password: String,
+    #[serde(default = "default_secret")]
+    pub secret: String,
+    #[serde(default = "default_session_ttl_secs")]
+    pub session_ttl_secs: u64,
 }
 
 impl Default for Config {
@@ -38,6 +42,8 @@ impl Default for Config {
             lockdown: default_lockdown(),
             user: default_user(),
             password: default_password(),
+            secret: default_secret(),
+            session_ttl_secs: default_session_ttl_secs(),
         }
     }
 }
@@ -72,6 +78,12 @@ fn default_user() -> String {
 fn default_password() -> String {
     "pass".to_string()
 }
+fn default_secret() -> String {
+    "change_me_secret".to_string()
+}
+fn default_session_ttl_secs() -> u64 {
+    8 * 3600
+}
 
 pub fn load(path: &str) -> Result<Config, String> {
     let s = std::fs::read_to_string(path)
@@ -83,6 +95,9 @@ pub fn load(path: &str) -> Result<Config, String> {
 
     if config.lockdown && config.user == "user" && config.password == "pass" {
         warn!("lockdown enabled but using default credentials (user:pass); set user and password in paste.toml");
+    }
+    if config.secret == "change_me_secret" {
+        warn!("using default token secret; set a strong secret in paste.toml");
     }
 
     Ok(config)
@@ -116,6 +131,8 @@ mod tests {
         assert!(!config.lockdown);
         assert_eq!(config.user, "user");
         assert_eq!(config.password, "pass");
+        assert_eq!(config.secret, "change_me_secret");
+        assert_eq!(config.session_ttl_secs, 28800);
     }
 
     #[test]
@@ -155,6 +172,7 @@ password = "pass123"
         assert_eq!(config.max_image_size, 20_971_520);
         assert_eq!(config.user, "user");
         assert_eq!(config.password, "pass");
+        assert_eq!(config.secret, "change_me_secret");
     }
 
     #[test]

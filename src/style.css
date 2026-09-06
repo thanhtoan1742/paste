@@ -228,3 +228,44 @@ a.home:hover {
   font-size: 0.85rem;
   margin: 1rem 0 0.5rem;
 }
+
+/* Login page */
+main.login {
+  max-width: 320px;
+  margin: 10vh auto;
+  text-align: center;
+}
+main.login h1 {
+  margin-bottom: 2rem;
+}
+main.login form {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+main.login label {
+  display: flex;
+  flex-direction: column;
+  text-align: left;
+  gap: 0.3rem;
+  font-size: 0.85rem;
+  color: var(--text-light);
+}
+main.login input {
+  padding: 0.5em 0.75em;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans-font);
+  font-size: 1rem;
+}
+main.login button {
+  padding: 0.6em;
+  font-size: 1rem;
+  cursor: pointer;
+}
+main.login .error {
+  color: var(--danger, #c0392b);
+  margin-bottom: 1rem;
+}

@@ -1,5 +1,55 @@
 const STYLE_STR: &str = include_str!("style.css");
 
+pub fn login_page(prefix: &str) -> String {
+    let action = if prefix.is_empty() {
+        "/login".to_string()
+    } else {
+        format!("{}/login", prefix)
+    };
+    format!(
+        r#"<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>paste - login</title><style>{style}</style></head>
+<body>
+<main class="login">
+<h1>paste</h1>
+<form method="POST" action="{action}">
+<label>username<input name="user" autofocus autocomplete="username"></label>
+<label>password<input name="password" type="password" autocomplete="current-password"></label>
+<button type="submit">login</button>
+</form>
+</main>
+</body></html>"#,
+        style = STYLE_STR,
+        action = action,
+    )
+}
+
+pub fn login_page_error(prefix: &str, message: &str) -> String {
+    let action = if prefix.is_empty() {
+        "/login".to_string()
+    } else {
+        format!("{}/login", prefix)
+    };
+    format!(
+        r#"<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>paste - login</title><style>{style}</style></head>
+<body>
+<main class="login">
+<h1>paste</h1>
+<p class="error">{message}</p>
+<form method="POST" action="{action}">
+<label>username<input name="user" autofocus autocomplete="username"></label>
+<label>password<input name="password" type="password" autocomplete="current-password"></label>
+<button type="submit">login</button>
+</form>
+</main>
+</body></html>"#,
+        style = STYLE_STR,
+        action = action,
+        message = html_escape(message),
+    )
+}
+
 pub fn not_found_page() -> String {
     format!(
         r#"<!DOCTYPE html>

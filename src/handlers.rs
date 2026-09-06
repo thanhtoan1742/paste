@@ -12,13 +12,38 @@ use std::sync::Arc;
 use std::time::Instant;
 use tracing::{debug, info, warn};
 
-use crate::auth::{check_basic_auth, unauthorized_response};
+use crate::auth::{constant_time_eq, create_token, validate_token};
 use crate::config::Config;
 use crate::multipart;
 use crate::state::{AppState, PasteContent};
 use crate::templates;
 
 pub const SWEEPER_INTERVAL_SECS: u64 = 60;
+
+const COOKIE_NAME: &str = "paste_session";
+
+fn token_from_headers(headers: &HeaderMap) -> Option<String> {
+    if let Some(cookie) = headers.get(header::COOKIE).and_then(|v| v.to_str().ok()) {
+        for part in cookie.split(';') {
+            let part = part.trim();
+            if let Some((k, v)) = part.split_once('=') {
+                if k == COOKIE_NAME {
+                    return Some(v.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+fn validate_session(state: &AppState, headers: &HeaderMap) -> bool {
+    let Some(token) = token_from_headers(headers) else {
+        return false;
+    };
+    validate_token(state.config.secret.as_bytes(), &token)
+        .map(|_| true)
+        .unwrap_or(false)
+}
 
 #[derive(Deserialize)]
 struct PasteForm {
@@ -96,18 +121,22 @@ async fn lockdown_auth(
     req: Request<Body>,
     next: Next,
 ) -> Response {
+    let path = req.uri().path().to_string();
+
+    // Login endpoints are always public so users can authenticate.
+    if path.ends_with("/login") {
+        return next.run(req).await;
+    }
+
     if !state.config.lockdown {
         return next.run(req).await;
     }
-    let auth = headers
-        .get(header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-    if check_basic_auth(auth, &state.config.user, &state.config.password) {
+
+    if validate_session(&state, &headers) {
         next.run(req).await
     } else {
-        warn!(path = %req.uri().path(), "lockdown rejected unauthenticated request");
-        unauthorized_response().into_response()
+        warn!(path = %path, "lockdown rejected unauthenticated request");
+        crate::auth::login_redirect(&state.config.prefix).into_response()
     }
 }
 
@@ -144,15 +173,10 @@ async fn create_paste(
     headers: HeaderMap,
     body: Body,
 ) -> impl IntoResponse {
-    let auth = headers
-        .get(header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-
-    if !check_basic_auth(auth, &state.config.user, &state.config.password) {
-        warn!("create paste rejected: invalid credentials");
-        return unauthorized_response().into_response();
-    }
+    // Creating a paste is public when lockdown is off (the dashboard is the
+    // only protected surface). In lockdown mode, the middleware has already
+    // enforced a valid session.
+    let _ = (&state, &headers);
 
     let content_type = headers
         .get(header::CONTENT_TYPE)
@@ -561,16 +585,122 @@ async fn get_paste(
 }
 
 async fn admin_page(State(state): State<Arc<AppState>>, headers: HeaderMap) -> impl IntoResponse {
-    let auth = headers
-        .get(header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
+    if !validate_session(&state, &headers) {
+        return crate::auth::login_redirect(&state.config.prefix).into_response();
+    }
+    render_admin(&state).await
+}
 
-    if check_basic_auth(auth, &state.config.user, &state.config.password) {
-        return render_admin(&state).await;
+#[derive(Deserialize)]
+struct LoginForm {
+    user: String,
+    password: String,
+}
+
+async fn login_page(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    axum::response::Html(templates::login_page(&state.config.prefix)).into_response()
+}
+
+async fn login_submit(
+    State(state): State<Arc<AppState>>,
+    body: String,
+) -> impl IntoResponse {
+    let form: LoginForm = match parse_login_form(&body) {
+        Ok(f) => f,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                axum::response::Html(templates::login_page_error(
+                    &state.config.prefix,
+                    "invalid form data",
+                )),
+            )
+                .into_response();
+        }
+    };
+
+    let user_ok = constant_time_eq(
+        form.user.as_bytes(),
+        state.config.user.as_bytes(),
+    );
+    let pass_ok = constant_time_eq(
+        form.password.as_bytes(),
+        state.config.password.as_bytes(),
+    );
+
+    if user_ok && pass_ok {
+        let token = create_token(
+            state.config.secret.as_bytes(),
+            &state.config.user,
+            state.config.session_ttl_secs,
+        );
+        info!(user = %state.config.user, "login successful");
+
+        let cookie = format!(
+            "{}={}; HttpOnly; SameSite=Lax; Path=/; Max-Age={}",
+            COOKIE_NAME, token, state.config.session_ttl_secs
+        );
+        let home = if state.config.prefix.is_empty() {
+            "/".to_string()
+        } else {
+            state.config.prefix.clone()
+        };
+        let mut resp = axum::response::Redirect::to(&home).into_response();
+        resp.headers_mut().insert(
+            header::SET_COOKIE,
+            cookie.parse().expect("valid cookie value"),
+        );
+        return resp;
     }
 
-    unauthorized_response().into_response()
+    warn!("login failed: invalid credentials");
+    (
+        StatusCode::UNAUTHORIZED,
+        axum::response::Html(templates::login_page_error(
+            &state.config.prefix,
+            "invalid username or password",
+        )),
+    )
+        .into_response()
+}
+
+fn parse_login_form(body: &str) -> Result<LoginForm, String> {
+    let mut user = String::new();
+    let mut password = String::new();
+    for pair in body.split('&') {
+        let (k, v) = match pair.split_once('=') {
+            Some(x) => x,
+            None => continue,
+        };
+        let decoded = percent_decode(v);
+        match k {
+            "user" => user = decoded,
+            "password" => password = decoded,
+            _ => {}
+        }
+    }
+    if user.is_empty() {
+        return Err("missing user".to_string());
+    }
+    Ok(LoginForm { user, password })
+}
+
+async fn logout(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let cookie = format!(
+        "{}={}; HttpOnly; SameSite=Lax; Path=/; Max-Age=0",
+        COOKIE_NAME, ""
+    );
+    let home = if state.config.prefix.is_empty() {
+        "/".to_string()
+    } else {
+        state.config.prefix.clone()
+    };
+    let mut resp = axum::response::Redirect::to(&home).into_response();
+    resp.headers_mut().insert(
+        header::SET_COOKIE,
+        cookie.parse().expect("valid cookie value"),
+    );
+    resp
 }
 
 async fn delete_paste(
@@ -578,14 +708,9 @@ async fn delete_paste(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    let auth = headers
-        .get(header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-
-    if !check_basic_auth(auth, &state.config.user, &state.config.password) {
-        warn!(paste_id = %id, "delete rejected: invalid credentials");
-        return unauthorized_response().into_response();
+    if !validate_session(&state, &headers) {
+        warn!(paste_id = %id, "delete rejected: not authenticated");
+        return crate::auth::login_redirect(&state.config.prefix).into_response();
     }
 
     state.pastes.write().await.remove(&id);
@@ -645,6 +770,8 @@ pub fn build_app(state: Arc<AppState>) -> Router {
 
     let inner = Router::new()
         .route("/", get(admin_page).post(create_paste))
+        .route("/login", get(login_page).post(login_submit))
+        .route("/logout", get(logout))
         .route("/{id}", get(get_paste))
         .route("/{id}/delete", post(delete_paste))
         .with_state(state)
@@ -688,6 +815,8 @@ mod tests {
                 lockdown: false,
                 user: "user".to_string(),
                 password: "secret".to_string(),
+                secret: "test-secret".to_string(),
+                session_ttl_secs: 28800,
             },
         })
     }
@@ -696,33 +825,9 @@ mod tests {
         build_app(test_state())
     }
 
-    fn encode_basic_auth(user: &str, pass: &str) -> String {
-        let creds = format!("{}:{}", user, pass);
-        format!("Basic {}", base64_encode(creds.as_bytes()))
-    }
-
-    fn base64_encode(input: &[u8]) -> String {
-        const TABLE: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-        let mut out = String::new();
-        for chunk in input.chunks(3) {
-            let b0 = chunk[0] as u32;
-            let b1 = if chunk.len() > 1 { chunk[1] as u32 } else { 0 };
-            let b2 = if chunk.len() > 2 { chunk[2] as u32 } else { 0 };
-            let triple = (b0 << 16) | (b1 << 8) | b2;
-            out.push(TABLE[((triple >> 18) & 0x3F) as usize] as char);
-            out.push(TABLE[((triple >> 12) & 0x3F) as usize] as char);
-            out.push(if chunk.len() > 1 {
-                TABLE[((triple >> 6) & 0x3F) as usize] as char
-            } else {
-                '='
-            });
-            out.push(if chunk.len() > 2 {
-                TABLE[(triple & 0x3F) as usize] as char
-            } else {
-                '='
-            });
-        }
-        out
+    fn make_session_cookie(username: &str) -> String {
+        let token = crate::auth::create_token(b"test-secret", username, 28800);
+        format!("paste_session={}", token)
     }
 
     #[tokio::test]
@@ -732,7 +837,8 @@ mod tests {
             .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
             .await
             .unwrap();
-        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+        assert_eq!(resp.headers().get(header::LOCATION).unwrap(), "/login");
     }
 
     #[tokio::test]
@@ -750,7 +856,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .uri("/")
-                    .header(header::AUTHORIZATION, encode_basic_auth("user", "secret"))
+                    .header(header::COOKIE, make_session_cookie("user"))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -773,7 +879,7 @@ mod tests {
                     .method("POST")
                     .uri("/")
                     .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-                    .header(header::AUTHORIZATION, encode_basic_auth("user", "secret"))
+                    .header(header::COOKIE, make_session_cookie("user"))
                     .body(Body::from("content=hello"))
                     .unwrap(),
             )
@@ -800,7 +906,7 @@ mod tests {
                     .method("POST")
                     .uri("/")
                     .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-                    .header(header::AUTHORIZATION, encode_basic_auth("user", "secret"))
+                    .header(header::COOKIE, make_session_cookie("user"))
                     .body(Body::from(format!("content={}", big)))
                     .unwrap(),
             )
@@ -828,7 +934,7 @@ mod tests {
                     .method("POST")
                     .uri("/")
                     .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-                    .header(header::AUTHORIZATION, encode_basic_auth("user", "secret"))
+                    .header(header::COOKIE, make_session_cookie("user"))
                     .body(Body::from("content=hello"))
                     .unwrap(),
             )
@@ -915,14 +1021,8 @@ mod tests {
             .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
             .await
             .unwrap();
-        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
-        let www_auth = resp
-            .headers()
-            .get(header::WWW_AUTHENTICATE)
-            .unwrap()
-            .to_str()
-            .unwrap();
-        assert_eq!(www_auth, r#"Basic realm="paste""#);
+        assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+        assert_eq!(resp.headers().get(header::LOCATION).unwrap(), "/login");
     }
 
     #[tokio::test]
@@ -932,14 +1032,14 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .uri("/")
-                    .header(header::AUTHORIZATION, encode_basic_auth("user", "wrong"))
+                    .header(header::COOKIE, "paste_session=invalid.token")
                     .body(Body::empty())
                     .unwrap(),
             )
             .await
             .unwrap();
-        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
-        assert!(resp.headers().get(header::WWW_AUTHENTICATE).is_some());
+        assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+        assert_eq!(resp.headers().get(header::LOCATION).unwrap(), "/login");
     }
 
     #[tokio::test]
@@ -957,7 +1057,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .uri("/")
-                    .header(header::AUTHORIZATION, encode_basic_auth("user", "secret"))
+                    .header(header::COOKIE, make_session_cookie("user"))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -995,7 +1095,7 @@ mod tests {
                 Request::builder()
                     .method("POST")
                     .uri("/del1/delete")
-                    .header(header::AUTHORIZATION, encode_basic_auth("user", "secret"))
+                    .header(header::COOKIE, make_session_cookie("user"))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1030,7 +1130,8 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+        assert_eq!(resp.headers().get(header::LOCATION).unwrap(), "/login");
         assert!(state.pastes.read().await.get("del2").is_some());
     }
 
@@ -1043,7 +1144,7 @@ mod tests {
                     .method("POST")
                     .uri("/")
                     .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-                    .header(header::AUTHORIZATION, encode_basic_auth("user", "secret"))
+                    .header(header::COOKIE, make_session_cookie("user"))
                     .body(Body::from("content=hello&ttl=30"))
                     .unwrap(),
             )
@@ -1061,7 +1162,7 @@ mod tests {
                     .method("POST")
                     .uri("/")
                     .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-                    .header(header::AUTHORIZATION, encode_basic_auth("user", "secret"))
+                    .header(header::COOKIE, make_session_cookie("user"))
                     .body(Body::from("content=hello&ttl=15&ttl_custom=45"))
                     .unwrap(),
             )
@@ -1079,7 +1180,7 @@ mod tests {
                     .method("POST")
                     .uri("/")
                     .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-                    .header(header::AUTHORIZATION, encode_basic_auth("user", "secret"))
+                    .header(header::COOKIE, make_session_cookie("user"))
                     .body(Body::from("content=hello&ttl=30&ttl_custom="))
                     .unwrap(),
             )
@@ -1101,7 +1202,7 @@ mod tests {
                     .method("POST")
                     .uri("/")
                     .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-                    .header(header::AUTHORIZATION, encode_basic_auth("user", "secret"))
+                    .header(header::COOKIE, make_session_cookie("user"))
                     .body(Body::from(body))
                     .unwrap(),
             )
@@ -1142,7 +1243,7 @@ mod tests {
                     .method("POST")
                     .uri("/")
                     .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-                    .header(header::AUTHORIZATION, encode_basic_auth("user", "secret"))
+                    .header(header::COOKIE, make_session_cookie("user"))
                     .body(Body::from("content=hello&ttl_custom=1500"))
                     .unwrap(),
             )
@@ -1168,6 +1269,8 @@ mod tests {
                 lockdown: false,
                 user: "user".to_string(),
                 password: "secret".to_string(),
+                secret: "test-secret".to_string(),
+                session_ttl_secs: 28800,
             },
         })
     }
@@ -1189,7 +1292,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .uri("/paste")
-                    .header(header::AUTHORIZATION, encode_basic_auth("user", "secret"))
+                    .header(header::COOKIE, make_session_cookie("user"))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1221,7 +1324,7 @@ mod tests {
                     .method("POST")
                     .uri("/paste")
                     .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-                    .header(header::AUTHORIZATION, encode_basic_auth("user", "secret"))
+                    .header(header::COOKIE, make_session_cookie("user"))
                     .body(Body::from("content=new"))
                     .unwrap(),
             )
@@ -1251,6 +1354,8 @@ mod tests {
                 lockdown: true,
                 user: "lockuser".to_string(),
                 password: "lockpass".to_string(),
+                secret: "test-secret".to_string(),
+                session_ttl_secs: 28800,
             },
         })
     }
@@ -1262,7 +1367,8 @@ mod tests {
             .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
             .await
             .unwrap();
-        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+        assert_eq!(resp.headers().get(header::LOCATION).unwrap(), "/login");
     }
 
     #[tokio::test]
@@ -1272,13 +1378,14 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .uri("/")
-                    .header(header::AUTHORIZATION, encode_basic_auth("lockuser", "wrong"))
+                    .header(header::COOKIE, "paste_session=invalid.token")
                     .body(Body::empty())
                     .unwrap(),
             )
             .await
             .unwrap();
-        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+        assert_eq!(resp.headers().get(header::LOCATION).unwrap(), "/login");
     }
 
     #[tokio::test]
@@ -1288,10 +1395,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .uri("/")
-                    .header(
-                        header::AUTHORIZATION,
-                        encode_basic_auth("lockuser", "lockpass"),
-                    )
+                    .header(header::COOKIE, make_session_cookie("lockuser"))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1307,10 +1411,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .uri("/")
-                    .header(
-                        header::AUTHORIZATION,
-                        encode_basic_auth("lockuser", "lockpass"),
-                    )
+                    .header(header::COOKIE, make_session_cookie("lockuser"))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1323,16 +1424,13 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .uri("/")
-                    .header(
-                        header::AUTHORIZATION,
-                        encode_basic_auth("wrong", "creds"),
-                    )
                     .body(Body::empty())
                     .unwrap(),
             )
             .await
             .unwrap();
-        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+        assert_eq!(resp.headers().get(header::LOCATION).unwrap(), "/login");
     }
 
     #[tokio::test]
@@ -1367,7 +1465,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .uri("/")
-                    .header(header::AUTHORIZATION, encode_basic_auth("user", "secret"))
+                    .header(header::COOKIE, make_session_cookie("user"))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1419,7 +1517,7 @@ mod tests {
                         header::CONTENT_TYPE,
                         "multipart/form-data; boundary=boundary",
                     )
-                    .header(header::AUTHORIZATION, encode_basic_auth("user", "secret"))
+                    .header(header::COOKIE, make_session_cookie("user"))
                     .body(Body::from(body))
                     .unwrap(),
             )
@@ -1487,7 +1585,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .uri("/")
-                    .header(header::AUTHORIZATION, encode_basic_auth("user", "secret"))
+                    .header(header::COOKIE, make_session_cookie("user"))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1518,7 +1616,7 @@ mod tests {
                         header::CONTENT_TYPE,
                         "multipart/form-data; boundary=boundary",
                     )
-                    .header(header::AUTHORIZATION, encode_basic_auth("user", "secret"))
+                    .header(header::COOKIE, make_session_cookie("user"))
                     .body(Body::from(body))
                     .unwrap(),
             )
@@ -1547,12 +1645,77 @@ mod tests {
                         header::CONTENT_TYPE,
                         "multipart/form-data; boundary=boundary",
                     )
-                    .header(header::AUTHORIZATION, encode_basic_auth("user", "secret"))
+                    .header(header::COOKIE, make_session_cookie("user"))
                     .body(Body::from(body))
                     .unwrap(),
             )
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+    }
+
+    #[tokio::test]
+    async fn login_page_serves_html() {
+        let app = test_app();
+        let resp = app
+            .oneshot(Request::builder().uri("/login").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 131072).await.unwrap();
+        let html = std::str::from_utf8(&body).unwrap();
+        assert!(html.contains("name=\"user\""));
+        assert!(html.contains("name=\"password\""));
+    }
+
+    #[tokio::test]
+    async fn login_submit_valid_credentials_sets_cookie() {
+        let app = test_app();
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/login")
+                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .body(Body::from("user=user&password=secret"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+        let set_cookie = resp.headers().get(header::SET_COOKIE).unwrap().to_str().unwrap();
+        assert!(set_cookie.starts_with("paste_session="));
+        assert!(set_cookie.contains("HttpOnly"));
+        assert!(set_cookie.contains("SameSite=Lax"));
+    }
+
+    #[tokio::test]
+    async fn login_submit_invalid_credentials_rejected() {
+        let app = test_app();
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/login")
+                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .body(Body::from("user=user&password=wrong"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        assert!(resp.headers().get(header::SET_COOKIE).is_none());
+    }
+
+    #[tokio::test]
+    async fn logout_clears_cookie() {
+        let app = test_app();
+        let resp = app
+            .oneshot(Request::builder().uri("/logout").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+        let set_cookie = resp.headers().get(header::SET_COOKIE).unwrap().to_str().unwrap();
+        assert!(set_cookie.contains("Max-Age=0"));
     }
 }
