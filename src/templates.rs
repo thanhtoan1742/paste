@@ -317,15 +317,16 @@ document.addEventListener('paste',e=>{{
   }}
 }});
 function setImg(f){{
-  hasImg=true;txt.value='';txt.disabled=true;
+  hasImg=true;txt.disabled=true;
+  const dt=new DataTransfer();dt.items.add(f);inp.files=dt.files;
   di.style.display='none';prev.src=URL.createObjectURL(f);
   prev.style.display='block';clr.style.display='inline-block';
 }}
-clr.addEventListener('click',()=>{{
+clr.addEventListener('click',e=>{{
+  e.stopPropagation();
   hasImg=false;inp.value='';prev.src='';prev.style.display='none';
   clr.style.display='none';di.style.display='';txt.disabled=false;
 }});
-txt.addEventListener('input',()=>{{if(txt.value&&hasImg)clr.click();}});
 </script>
 </main>
 </body></html>"#,
